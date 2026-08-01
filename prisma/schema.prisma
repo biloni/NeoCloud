@@ -1,0 +1,214 @@
+// NeoCloud People OS — Prisma schema (SQLite, local-dev adaptation of the
+// spec in CLAUDE.md). Enum columns are String here (validated via
+// lib/enums.ts + zod at every write); Json columns are String (JSON.stringify)
+// since the SQLite connector supports neither natively.
+// See prisma/POSTGRES_MIGRATION.md for the Postgres/Supabase swap.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- DIMENSIONS (master data) ----------
+
+model Worker {
+  id            String   @id // "E0001"
+  legalName     String
+  preferredName String?
+  countryCode   String // US, CA, GB, IN
+  hireDate      DateTime
+  status        String // WorkerStatus — derived-cached from events; source of truth is events
+
+  positions   PositionAssignment[]
+  events      WorkerEvent[]
+  compHistory CompRecord[]
+
+  managedOrgs SupervisoryOrg[] @relation("OrgManager")
+
+  bpInstancesInitiated BpInstance[]     @relation("Initiator")
+  bpInstancesSubject   BpInstance[]     @relation("Subject")
+  bpStepInstances      BpStepInstance[] @relation("Assignee")
+
+  @@index([status])
+  @@index([countryCode])
+}
+
+model SupervisoryOrg {
+  id       String  @id // "SO-GPU-CLOUD"
+  name     String // "GPU Cloud"
+  parentId String?
+  parent   SupervisoryOrg?  @relation("OrgTree", fields: [parentId], references: [id])
+  children SupervisoryOrg[] @relation("OrgTree")
+
+  managerId String?
+  manager   Worker? @relation("OrgManager", fields: [managerId], references: [id])
+
+  positions Position[]
+}
+
+model JobProfile {
+  id    String @id // "JP-SWE-IC5"
+  title String
+  level String // IC1..IC7, M3..M6
+  track String // Track: IC | M
+
+  positions Position[]
+  compBands CompBand[]
+}
+
+model Location {
+  id          String @id // "SF", "SJ", "REMOTE_US", "LONDON", "TORONTO", "BANGALORE"
+  name        String
+  countryCode String
+
+  positions Position[]
+}
+
+model Position {
+  id           String @id // "P00001"
+  supOrgId     String
+  supOrg       SupervisoryOrg @relation(fields: [supOrgId], references: [id])
+  jobProfileId String
+  jobProfile   JobProfile     @relation(fields: [jobProfileId], references: [id])
+  locationId   String
+  location     Location       @relation(fields: [locationId], references: [id])
+  status       String // PositionStatus: OPEN | FILLED | CLOSED
+
+  assignments PositionAssignment[]
+
+  @@index([status])
+}
+
+model PositionAssignment {
+  // effective-dated worker<->position link
+  id            String    @id @default(cuid())
+  workerId      String
+  worker        Worker    @relation(fields: [workerId], references: [id])
+  positionId    String
+  position      Position  @relation(fields: [positionId], references: [id])
+  effectiveFrom DateTime
+  effectiveTo   DateTime? // null = current
+
+  @@index([workerId, effectiveTo])
+  @@index([positionId, effectiveTo])
+}
+
+model CompBand {
+  id           String @id
+  jobProfileId String
+  jobProfile   JobProfile @relation(fields: [jobProfileId], references: [id])
+  countryCode  String
+  currency     String
+  bandMin      Decimal
+  bandMid      Decimal
+  bandMax      Decimal
+
+  @@index([jobProfileId, countryCode])
+}
+
+model CompRecord {
+  // effective-dated compensation
+  id            String    @id @default(cuid())
+  workerId      String
+  worker        Worker    @relation(fields: [workerId], references: [id])
+  annualSalary  Decimal // LOCAL currency
+  currency      String // USD, GBP, CAD, INR
+  effectiveFrom DateTime
+  effectiveTo   DateTime? // null = current
+  reason        String // HIRE, MERIT, PROMOTION, ADJUSTMENT
+
+  @@index([workerId, effectiveTo])
+}
+
+model FxRate {
+  currency String @id // GBP, CAD, INR (USD implicit 1.0)
+  toUsd    Decimal
+}
+
+// ---------- TRANSACTIONS (events) ----------
+
+model WorkerEvent {
+  id            String   @id @default(cuid())
+  workerId      String
+  worker        Worker   @relation(fields: [workerId], references: [id])
+  type          String // EventType
+  effectiveDate DateTime
+  payload       String // JSON — typed per event type, documented in README
+  bpInstanceId  String? // link to the BP that produced it, if any
+  createdAt     DateTime @default(now())
+
+  @@index([workerId])
+  @@index([type])
+}
+
+// ---------- BUSINESS PROCESS ENGINE ----------
+
+model BpDefinition {
+  id        String       @id // "BP-WORKER-DATA-CHANGE"
+  name      String
+  steps     BpStep[]
+  instances BpInstance[]
+}
+
+model BpStep {
+  id            String       @id @default(cuid())
+  definitionId  String
+  definition    BpDefinition @relation(fields: [definitionId], references: [id])
+  order         Int
+  name          String // "Initiate", "Manager Approval", ...
+  assigneeRule  String // AssigneeRule
+  conditionRule String? // JSON-logic-ish string evaluated by the engine, e.g. "compChangePct>10"
+
+  @@index([definitionId, order])
+}
+
+model BpInstance {
+  id              String    @id @default(cuid())
+  definitionId    String
+  definition      BpDefinition @relation(fields: [definitionId], references: [id])
+  subjectWorkerId String
+  subjectWorker   Worker    @relation("Subject", fields: [subjectWorkerId], references: [id])
+  initiatorId     String
+  initiator       Worker    @relation("Initiator", fields: [initiatorId], references: [id])
+  status          String // BpStatus
+  proposedChange  String // JSON
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  stepInstances BpStepInstance[]
+
+  @@index([status])
+  @@index([subjectWorkerId])
+}
+
+model BpStepInstance {
+  // THE AUDIT TRAIL
+  id         String     @id @default(cuid())
+  instanceId String
+  instance   BpInstance @relation(fields: [instanceId], references: [id])
+  order      Int
+  stepName   String
+  assigneeId String // resolved worker id
+  assignee   Worker     @relation("Assignee", fields: [assigneeId], references: [id])
+  action     String // StepAction
+  comment    String?
+  actedAt    DateTime?
+  createdAt  DateTime   @default(now())
+
+  @@index([instanceId])
+  @@index([assigneeId, action])
+}
+
+// ---------- WORKFORCE PLANNING ----------
+
+model Scenario {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  assumptions String // JSON: { hirePlan, attritionByDept, meritByLevel, meritEffectiveDate }
+  createdAt   DateTime @default(now())
+}
