@@ -30,6 +30,7 @@ export const EVENT_TYPES = [
   "COMP_CHANGE",
   "STATUS_CHANGE",
   "PROMOTION",
+  "PROFILE_CHANGE",
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 export const EventTypeSchema = z.enum(EVENT_TYPES);
@@ -48,6 +49,15 @@ export const ASSIGNEE_RULES = [
   "SKIP_LEVEL_MANAGER",
   "HR_PARTNER",
   "COMP_PARTNER",
+  // Added additively for the RBAC "Profile Change Request" workflow (see
+  // security/roles.ts FIXED_ROLE_ASSIGNMENTS): resolves to the fixed HR Ops
+  // worker if the initiator is a plain Employee, or the fixed HR Partner
+  // worker if the initiator is a Manager/Skip Level Manager — the exact
+  // routing table from the RBAC spec. Distinct from the existing HR_PARTNER
+  // rule above (which resolves dynamically by G&A seniority for the
+  // original Worker Data Change flow) — the two flows intentionally use
+  // different resolution strategies and are not unified.
+  "ROUTE_BASED_APPROVER",
 ] as const;
 export type AssigneeRule = (typeof ASSIGNEE_RULES)[number];
 export const AssigneeRuleSchema = z.enum(ASSIGNEE_RULES);

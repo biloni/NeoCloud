@@ -1,7 +1,17 @@
 "use server";
+import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { startWorkerDataChange, actOnStep } from "./bp-engine";
-import { createScenario, type ScenarioAssumptions } from "./planning";
+import { startWorkerDataChange, actOnStep, startProfileChangeRequest } from "./bp-engine";
+import { createScenario, updateScenario, duplicateScenario, deleteScenario, type ScenarioAssumptions } from "./planning";
+import { createHire } from "./hire";
+import { acknowledgeAnomaly, unacknowledgeAnomaly } from "./anomaly-ack";
+import { WORKER_COOKIE } from "./persona-constants";
+import type { LevelCode } from "./reference-data";
+import { getAuthContext } from "./auth-context";
+import { assertPermission } from "@/security/routeGuard";
+import { Permission } from "@/security/permissions";
+import { effectiveWorkerId, canEditEmployee } from "@/security/authorization";
+import { startProxySession, endProxySession, searchEmployees, type EmployeeSearchResult } from "@/security/proxy";
 
 export async function startChangeAction(formData: FormData) {
   const subjectWorkerId = String(formData.get("subjectWorkerId") ?? "").toUpperCase().trim();
@@ -40,23 +50,121 @@ export async function actOnStepAction(formData: FormData) {
   revalidatePath("/workers");
 }
 
-export async function createScenarioAction(formData: FormData) {
-  const name = String(formData.get("name") ?? "").trim();
-  const description = String(formData.get("description") ?? "").trim();
-  const assumptionsRaw = String(formData.get("assumptions") ?? "{}");
+// Self-service "Profile Change Request" — a second BpDefinition running on
+// the same generic engine (see lib/bp-engine.ts's startProfileChangeRequest
+// doc comment). subjectWorkerId defaults to the initiator (requesting a
+// change to your own record); a Manager/Skip-Level may instead request one
+// for a report they can edit — routing then resolves to HR Partner instead
+// of HR Ops (security/README.md "Workflow authorization").
+export async function startProfileChangeAction(formData: FormData) {
+  const ctx = await getAuthContext();
+  const initiatorId = effectiveWorkerId(ctx);
+  const subjectWorkerId = (String(formData.get("subjectWorkerId") ?? "").toUpperCase().trim()) || initiatorId;
+  const requestedChange = String(formData.get("requestedChange") ?? "").trim();
 
-  if (!name) throw new Error("Scenario name is required");
-  let assumptions: ScenarioAssumptions;
+  if (subjectWorkerId !== initiatorId && !(await canEditEmployee(ctx, subjectWorkerId))) {
+    throw new Error("You are not authorized to request a profile change for this worker");
+  }
+
   try {
-    assumptions = JSON.parse(assumptionsRaw);
-  } catch {
-    throw new Error("Assumptions must be valid JSON");
+    await startProfileChangeRequest({ subjectWorkerId, initiatorId, requestedChange });
+  } catch (e) {
+    throw new Error(e instanceof Error ? e.message : "Failed to submit profile change request");
   }
-  if (!assumptions.hirePlan || !assumptions.attritionByDept || !assumptions.meritByLevel || !assumptions.meritEffectiveDate) {
-    throw new Error("Assumptions JSON must include hirePlan, attritionByDept, meritByLevel, meritEffectiveDate");
-  }
+  revalidatePath(`/workers/${subjectWorkerId}`);
+  revalidatePath("/inbox");
+  revalidatePath("/home");
+}
 
-  await createScenario(name, description, assumptions);
+export async function createScenarioAction(input: { name: string; description: string; assumptions: ScenarioAssumptions }): Promise<string> {
+  const name = input.name.trim();
+  if (!name) throw new Error("Scenario name is required");
+  const scenario = await createScenario(name, input.description.trim(), input.assumptions);
   revalidatePath("/planning");
   revalidatePath("/planning/compare");
+  return scenario.id;
+}
+
+export async function updateScenarioAction(input: { id: string; name?: string; description?: string; assumptions?: ScenarioAssumptions }): Promise<void> {
+  if (input.name !== undefined && !input.name.trim()) throw new Error("Scenario name cannot be empty");
+  await updateScenario(input.id, {
+    name: input.name?.trim(),
+    description: input.description?.trim(),
+    assumptions: input.assumptions,
+  });
+  revalidatePath("/planning");
+  revalidatePath("/planning/compare");
+}
+
+export async function duplicateScenarioAction(input: { id: string; newName: string }): Promise<string> {
+  const newName = input.newName.trim();
+  if (!newName) throw new Error("New scenario name is required");
+  const scenario = await duplicateScenario(input.id, newName);
+  revalidatePath("/planning");
+  revalidatePath("/planning/compare");
+  return scenario.id;
+}
+
+export async function deleteScenarioAction(id: string): Promise<void> {
+  await deleteScenario(id);
+  revalidatePath("/planning");
+  revalidatePath("/planning/compare");
+}
+
+export async function createHireAction(formData: FormData) {
+  // Authorization goes through the RBAC engine now (security/authorization.ts)
+  // rather than a raw persona-string comparison — checked server-side too
+  // since the client already hides the form for unauthorized roles, but a
+  // direct action call shouldn't silently trust that.
+  const ctx = await getAuthContext();
+  assertPermission(ctx, Permission.ADD_EMPLOYEE, "Only HR Partner can create a new employee");
+
+  const legalName = String(formData.get("legalName") ?? "").trim();
+  const countryCode = String(formData.get("countryCode") ?? "US");
+  const locationId = String(formData.get("locationId") ?? "");
+  const level = String(formData.get("level") ?? "IC1") as LevelCode;
+  const managerId = String(formData.get("managerId") ?? "");
+  const annualSalary = Number(formData.get("annualSalary"));
+  const hireDateRaw = String(formData.get("hireDate") ?? "");
+  const hireDate = hireDateRaw ? new Date(hireDateRaw) : new Date();
+
+  let workerId: string;
+  try {
+    workerId = await createHire({ legalName, countryCode, locationId, level, managerId, annualSalary, hireDate });
+  } catch (e) {
+    throw new Error(e instanceof Error ? e.message : "Failed to create employee");
+  }
+  revalidatePath("/workers");
+  revalidatePath("/");
+  return workerId;
+}
+
+export async function acknowledgeAnomalyAction(input: { key: string; comment?: string }): Promise<void> {
+  const ctx = await getAuthContext();
+  assertPermission(ctx, Permission.VIEW_PAYROLL, "Only Payroll Admin (or a role with payroll access) can acknowledge anomalies");
+  const actorId = effectiveWorkerId(ctx);
+  await acknowledgeAnomaly(input.key, actorId, input.comment?.trim() || undefined);
+  revalidatePath("/payroll");
+}
+
+export async function unacknowledgeAnomalyAction(key: string): Promise<void> {
+  await unacknowledgeAnomaly(key);
+  revalidatePath("/payroll");
+}
+
+export async function startProxyAction(targetWorkerId: string): Promise<{ allowed: boolean; reason?: string }> {
+  const actualWorkerId = (cookies().get(WORKER_COOKIE)?.value || "").toUpperCase();
+  const result = await startProxySession(actualWorkerId, targetWorkerId.toUpperCase());
+  revalidatePath("/", "layout");
+  return result;
+}
+
+export async function endProxyAction(proxyWorkerId: string): Promise<void> {
+  const actualWorkerId = (cookies().get(WORKER_COOKIE)?.value || "").toUpperCase();
+  await endProxySession(actualWorkerId, proxyWorkerId.toUpperCase());
+  revalidatePath("/", "layout");
+}
+
+export async function searchEmployeesAction(query: string): Promise<EmployeeSearchResult[]> {
+  return searchEmployees(query);
 }

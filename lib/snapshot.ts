@@ -126,7 +126,13 @@ export async function getWorkforceSnapshot(asOf: Date = new Date()): Promise<Wor
     if (!position) continue;
     const location = locById.get(position.locationId);
     const jobProfile = jpById.get(position.jobProfileId);
-    const managerId = orgManagerById.get(position.supOrgId) ?? null;
+    // A worker's position sits in the org headed by their manager — except
+    // the CEO, whose own position sits in the org they themselves head
+    // (there's no one above them). Without this guard, orgManagerById would
+    // resolve to the CEO's own id, making them their own manager (and, via
+    // any code that treats managerId as "reports to", their own report).
+    const resolvedManagerId = orgManagerById.get(position.supOrgId) ?? null;
+    const managerId = resolvedManagerId === w.id ? null : resolvedManagerId;
     const managerWorker = managerId ? workers.find((x) => x.id === managerId) : null;
 
     const salary = Number(comp.annualSalary);

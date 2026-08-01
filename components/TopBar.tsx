@@ -1,31 +1,43 @@
 "use client";
+import { Menu } from "lucide-react";
+import { PersonaSwitcher } from "@/components/security/PersonaSwitcher";
+import { ProxySelector } from "@/components/security/ProxySelector";
 import { usePersona } from "@/lib/persona";
-import { PERSONAS } from "@/lib/enums";
-import { Select } from "./ui";
+import type { DemoPersonaOption } from "@/security/demoPersonas";
 
-export function TopBar() {
-  const { persona, setPersona, workerId, setWorkerId } = usePersona();
+export function TopBar({
+  onOpenMenu,
+  currentWorkerId,
+  roleLabel,
+  demoOptions,
+  proxyEligible,
+}: {
+  onOpenMenu?: () => void;
+  currentWorkerId: string;
+  roleLabel: string;
+  demoOptions: DemoPersonaOption[];
+  proxyEligible: boolean;
+}) {
+  const { workerId } = usePersona();
+
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card px-6">
-      <div className="text-sm text-muted-foreground">
-        Acting as <span className="font-medium text-foreground">{PERSONAS.find((p) => p.key === persona)?.label}</span>
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 sm:px-6">
+      <div className="flex min-w-0 items-center gap-2">
+        <button
+          onClick={onOpenMenu}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md hover:bg-muted md:hidden"
+          aria-label="Open navigation menu"
+        >
+          <Menu size={18} />
+        </button>
+        <div className="hidden truncate text-sm text-muted-foreground sm:block">
+          Signed in as <span className="font-medium text-foreground">{roleLabel}</span>
+          <span className="ml-1 text-xs">({currentWorkerId})</span>
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <label className="text-xs text-muted-foreground">Persona</label>
-        <Select value={persona} onChange={(e) => setPersona(e.target.value as any)}>
-          {PERSONAS.map((p) => (
-            <option key={p.key} value={p.key}>
-              {p.label}
-            </option>
-          ))}
-        </Select>
-        <label className="ml-2 text-xs text-muted-foreground">As worker</label>
-        <input
-          className="h-9 w-24 rounded-md border border-border bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent"
-          value={workerId}
-          onChange={(e) => setWorkerId(e.target.value.toUpperCase())}
-          placeholder="E0001"
-        />
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        <PersonaSwitcher options={demoOptions} currentWorkerId={workerId || currentWorkerId} />
+        <ProxySelector eligible={proxyEligible} />
       </div>
     </header>
   );

@@ -3,16 +3,9 @@ import { useState, useTransition } from "react";
 import { actOnStepAction } from "@/lib/actions";
 import { Card, CardTitle, Badge, Button } from "@/components/ui";
 import { formatMoney } from "@/lib/utils";
+import type { EnrichedInboxItem } from "@/lib/bp-engine";
 
-export interface InboxItem {
-  stepInstanceId: string;
-  stepName: string;
-  instanceId: string;
-  subjectWorkerId: string;
-  subjectName: string;
-  initiatorName: string;
-  proposedChange: Record<string, any>;
-}
+export type InboxItem = EnrichedInboxItem;
 
 function ChangeSummary({ change }: { change: Record<string, any> }) {
   if (change.changeType === "COMP_CHANGE") {
@@ -24,7 +17,13 @@ function ChangeSummary({ change }: { change: Record<string, any> }) {
       </span>
     );
   }
-  return <span>Transfer to manager {change.newManagerId} · {change.newLocationId}</span>;
+  if (change.changeType === "TRANSFER") {
+    return <span>Transfer to manager {change.newManagerId} · {change.newLocationId}</span>;
+  }
+  if (change.changeType === "PROFILE_CHANGE") {
+    return <span>{change.requestedChange}</span>;
+  }
+  return <span className="text-muted-foreground">{JSON.stringify(change)}</span>;
 }
 
 function ActionRow({ item, actorWorkerId }: { item: InboxItem; actorWorkerId: string }) {

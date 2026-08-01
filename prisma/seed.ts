@@ -4,6 +4,7 @@
 // readable summary this script's own summary printout feeds.
 import { PrismaClient } from "@prisma/client";
 import seedrandom from "seedrandom";
+import { startWorkerDataChange, startProfileChangeRequest, actOnStep } from "../lib/bp-engine";
 import {
   LEVEL_ORDER,
   LEVEL_INFO,
@@ -51,6 +52,11 @@ function randomDateBetween(start: Date, end: Date): Date {
 
 const TODAY = new Date();
 TODAY.setHours(0, 0, 0, 0);
+
+// Always 6 months out from whenever the seed runs, so it lands inside the
+// 12-month planning projection window regardless of seed date (a fixed
+// "April 1 of this year" would already be in the past for most of the year).
+const MERIT_EFFECTIVE_DATE = new Date(TODAY.getFullYear(), TODAY.getMonth() + 6, 1).toISOString();
 
 // IC-heavy pyramid: bulk in IC2-IC4, thin at the top.
 const LEVEL_WEIGHTS: Record<LevelCode, number> = {
@@ -446,6 +452,20 @@ async function main() {
     return min + rand() * (max - min);
   }
 
+  // ---------- Planted data-quality issue: a duplicate "current" CompRecord ----------
+  // Deliberate, documented demo exception (same spirit as the below-band-mid salary
+  // seeding above) — one worker gets a second active CompRecord left open by mistake,
+  // so the payroll "Duplicate Payment" anomaly check has a real example to catch.
+  const duplicatePaymentTarget = workers.find(
+    (w) => w.status === "ACTIVE" && w.department === "GPU Cloud" && !SAMPLE.some((s) => s.id === w.id)
+  );
+  if (duplicatePaymentTarget) {
+    const currentRecord = compRecords.find((c) => c.workerId === duplicatePaymentTarget.id && c.effectiveTo === null);
+    if (currentRecord) {
+      compRecords.push({ ...currentRecord, annualSalary: currentRecord.annualSalary * 1.02 });
+    }
+  }
+
   await prisma.position.createMany({ data: positions });
   await prisma.positionAssignment.createMany({ data: assignments });
   await prisma.compRecord.createMany({ data: compRecords });
@@ -482,26 +502,57 @@ async function main() {
     },
   });
 
+  // ---------- Business Process definition: Profile Change Request ----------
+  // A second, independent BpDefinition on the same generic engine (see
+  // lib/bp-engine.ts). Routing to HR Ops vs. HR Partner is resolved
+  // dynamically per instance by the ROUTE_BASED_APPROVER assignee rule
+  // (based on the initiator's RBAC role), not hardcoded here.
+  await prisma.bpDefinition.create({
+    data: {
+      id: "BP-PROFILE-CHANGE-REQUEST",
+      name: "Profile Change Request",
+      steps: {
+        create: [
+          { order: 1, name: "Initiate", assigneeRule: "INITIATOR" },
+          { order: 2, name: "Review", assigneeRule: "ROUTE_BASED_APPROVER" },
+          { order: 3, name: "Complete", assigneeRule: "INITIATOR" },
+        ],
+      },
+    },
+  });
+
   // ---------- Pre-built planning scenarios ----------
+  const PLAN_OF_RECORD_LOCATION_MIX = { SF: 33, SJ: 21, REMOTE_US: 21, TORONTO: 8, LONDON: 8, BANGALORE: 9 };
+  const IPO_READINESS_LOCATION_MIX = { SF: 22, SJ: 12, REMOTE_US: 20, TORONTO: 8, LONDON: 13, BANGALORE: 25 };
+
   await prisma.scenario.create({
     data: {
       name: "Plan of Record",
       description: "Baseline plan: steady hiring pace, current attrition trend, standard merit cycle.",
       assumptions: JSON.stringify({
         hirePlan: [
-          { department: "GPU Cloud", quarter: "Q1", count: 8, targetLevel: "IC3", targetLocation: "SF", startMonth: 1 },
-          { department: "Engineering", quarter: "Q1", count: 12, targetLevel: "IC3", targetLocation: "REMOTE_US", startMonth: 1 },
-          { department: "GPU Cloud", quarter: "Q2", count: 6, targetLevel: "IC4", targetLocation: "SJ", startMonth: 4 },
-          { department: "Engineering", quarter: "Q2", count: 10, targetLevel: "IC3", targetLocation: "BANGALORE", startMonth: 4 },
-          { department: "On-Prem", quarter: "Q2", count: 4, targetLevel: "IC3", targetLocation: "TORONTO", startMonth: 5 },
-          { department: "Engineering", quarter: "Q3", count: 9, targetLevel: "IC4", targetLocation: "SF", startMonth: 7 },
-          { department: "G&A", quarter: "Q3", count: 3, targetLevel: "IC3", targetLocation: "SF", startMonth: 8 },
-          { department: "GPU Cloud", quarter: "Q4", count: 5, targetLevel: "IC3", targetLocation: "SF", startMonth: 10 },
-          { department: "Engineering", quarter: "Q4", count: 8, targetLevel: "IC3", targetLocation: "LONDON", startMonth: 11 },
+          { department: "GPU Cloud", count: 8, targetLevel: "IC3", startMonth: 1 },
+          { department: "Engineering", count: 12, targetLevel: "IC3", startMonth: 1 },
+          { department: "GPU Cloud", count: 6, targetLevel: "IC4", startMonth: 4 },
+          { department: "Engineering", count: 10, targetLevel: "IC3", startMonth: 4 },
+          { department: "On-Prem", count: 4, targetLevel: "IC3", startMonth: 5 },
+          { department: "Engineering", count: 9, targetLevel: "IC4", startMonth: 7 },
+          { department: "G&A", count: 3, targetLevel: "IC3", startMonth: 8 },
+          { department: "GPU Cloud", count: 5, targetLevel: "IC3", startMonth: 10 },
+          { department: "Engineering", count: 8, targetLevel: "IC3", startMonth: 11 },
+        ],
+        transfers: [
+          { fromDepartment: "On-Prem", toDepartment: "GPU Cloud", count: 2, month: 6 },
+        ],
+        promotions: [
+          { department: "Engineering", fromLevel: "IC4", toLevel: "IC5", count: 3, month: 5 },
+          { department: "GPU Cloud", fromLevel: "IC3", toLevel: "IC4", count: 2, month: 9 },
         ],
         attritionByDept: { "GPU Cloud": 12, "On-Prem": 10, "Engineering": 14, "G&A": 9 },
         meritByLevel: { IC1: 3, IC2: 3.5, IC3: 4, IC4: 4, IC5: 4.5, IC6: 5, IC7: 5, M3: 4, M4: 4.5, M5: 5, M6: 5 },
-        meritEffectiveDate: new Date(TODAY.getFullYear(), 3, 1).toISOString(),
+        meritEffectiveDate: MERIT_EFFECTIVE_DATE,
+        hiringCostPerHireUsd: 15000,
+        locationMix: PLAN_OF_RECORD_LOCATION_MIX,
       }),
     },
   });
@@ -509,25 +560,107 @@ async function main() {
   await prisma.scenario.create({
     data: {
       name: "IPO Readiness (slower G&A, faster Eng)",
-      description: "Front-loads Engineering hiring ahead of IPO scaling needs; slows G&A growth to manage burn.",
+      description: "Front-loads Engineering hiring ahead of IPO scaling needs, skewed toward lower-cost international locations; slows G&A growth to manage burn.",
       assumptions: JSON.stringify({
         hirePlan: [
-          { department: "Engineering", quarter: "Q1", count: 18, targetLevel: "IC3", targetLocation: "REMOTE_US", startMonth: 1 },
-          { department: "Engineering", quarter: "Q1", count: 6, targetLevel: "IC4", targetLocation: "SF", startMonth: 2 },
-          { department: "GPU Cloud", quarter: "Q1", count: 6, targetLevel: "IC3", targetLocation: "SF", startMonth: 1 },
-          { department: "Engineering", quarter: "Q2", count: 16, targetLevel: "IC3", targetLocation: "BANGALORE", startMonth: 4 },
-          { department: "GPU Cloud", quarter: "Q2", count: 5, targetLevel: "IC4", targetLocation: "SJ", startMonth: 4 },
-          { department: "Engineering", quarter: "Q3", count: 14, targetLevel: "IC3", targetLocation: "LONDON", startMonth: 7 },
-          { department: "On-Prem", quarter: "Q3", count: 3, targetLevel: "IC3", targetLocation: "TORONTO", startMonth: 8 },
-          { department: "Engineering", quarter: "Q4", count: 12, targetLevel: "IC4", targetLocation: "SF", startMonth: 10 },
-          { department: "G&A", quarter: "Q4", count: 1, targetLevel: "IC3", targetLocation: "SF", startMonth: 11 },
+          { department: "Engineering", count: 18, targetLevel: "IC3", startMonth: 1 },
+          { department: "Engineering", count: 6, targetLevel: "IC4", startMonth: 2 },
+          { department: "GPU Cloud", count: 6, targetLevel: "IC3", startMonth: 1 },
+          { department: "Engineering", count: 16, targetLevel: "IC3", startMonth: 4 },
+          { department: "GPU Cloud", count: 5, targetLevel: "IC4", startMonth: 4 },
+          { department: "Engineering", count: 14, targetLevel: "IC3", startMonth: 7 },
+          { department: "On-Prem", count: 3, targetLevel: "IC3", startMonth: 8 },
+          { department: "Engineering", count: 12, targetLevel: "IC4", startMonth: 10 },
+          { department: "G&A", count: 1, targetLevel: "IC3", startMonth: 11 },
+        ],
+        transfers: [
+          { fromDepartment: "G&A", toDepartment: "Engineering", count: 3, month: 3 },
+        ],
+        promotions: [
+          { department: "Engineering", fromLevel: "IC4", toLevel: "IC5", count: 5, month: 6 },
+          { department: "Engineering", fromLevel: "IC5", toLevel: "IC6", count: 2, month: 9 },
         ],
         attritionByDept: { "GPU Cloud": 12, "On-Prem": 10, "Engineering": 11, "G&A": 9 },
         meritByLevel: { IC1: 3, IC2: 3.5, IC3: 4, IC4: 4.5, IC5: 5, IC6: 5.5, IC7: 5.5, M3: 4.5, M4: 5, M5: 5.5, M6: 5.5 },
-        meritEffectiveDate: new Date(TODAY.getFullYear(), 3, 1).toISOString(),
+        meritEffectiveDate: MERIT_EFFECTIVE_DATE,
+        hiringCostPerHireUsd: 18000,
+        locationMix: IPO_READINESS_LOCATION_MIX,
       }),
     },
   });
+
+  // ---------- Demo Business Process instances (realistic inbox content) ----------
+  // Seeded through the real bp-engine functions (not raw prisma writes) so
+  // routing/condition logic is exercised exactly as it would be at runtime.
+  // Picks live report relationships out of the just-generated `workers`
+  // array rather than hardcoding IDs, so this stays correct even if the
+  // deterministic generation logic above changes who reports to whom.
+  function firstActiveReportOf(managerId: string): string | undefined {
+    return workers.find((w) => w.managerId === managerId && w.status === "ACTIVE")?.id;
+  }
+  async function currentSalaryOf(workerId: string): Promise<number> {
+    const comp = await prisma.compRecord.findFirstOrThrow({ where: { workerId, effectiveTo: null } });
+    return Number(comp.annualSalary);
+  }
+  try {
+    const reportOfE0002 = firstActiveReportOf("E0002");
+    const reportOfE0007 = firstActiveReportOf("E0007");
+    const reportOfE0005 = firstActiveReportOf("E0005");
+
+    // A: HR Partner initiates a routine <=10% raise for an IC managed by
+    // E0002 -> Manager Approval pending for E0002; Comp Partner step
+    // auto-skips (condition not met); HR Partner Approval pending.
+    if (reportOfE0002) {
+      await startWorkerDataChange({
+        subjectWorkerId: reportOfE0002, initiatorId: "E0301", changeType: "COMP_CHANGE",
+        newSalary: Math.round((await currentSalaryOf(reportOfE0002)) * 1.06),
+      });
+    }
+
+    // B: E0007 initiates a >10% raise for their own report -> Comp Partner
+    // review step is NOT skipped. Walked to COMPLETED to seed a full
+    // multi-step audit trail (Manager -> Comp Partner -> HR Partner).
+    if (reportOfE0007) {
+      const instB = await startWorkerDataChange({
+        subjectWorkerId: reportOfE0007, initiatorId: "E0007", changeType: "COMP_CHANGE",
+        newSalary: Math.round((await currentSalaryOf(reportOfE0007)) * 1.18),
+      });
+      // "Complete" is auto-resolved by executeCompletion once the last real
+      // approval step clears — don't act on it a second time here.
+      const steps = await prisma.bpStepInstance.findMany({ where: { instanceId: instB.id, stepName: { not: "Complete" } }, orderBy: { order: "asc" } });
+      for (const step of steps) {
+        if (step.action !== "PENDING") continue;
+        await actOnStep(step.id, step.assigneeId, "APPROVED", "Approved — within band, aligned with cycle guidance.");
+      }
+    }
+
+    // C: HR Partner initiates a transfer for an On-Prem report -> Manager
+    // Approval pending for E0005.
+    if (reportOfE0005) {
+      await startWorkerDataChange({
+        subjectWorkerId: reportOfE0005, initiatorId: "E0301", changeType: "TRANSFER", newManagerId: "E0001",
+      });
+    }
+
+    // D: Employee-initiated profile change on their own record -> routes to
+    // HR Ops (E0302), no Manager/Skip-Level role held by the initiator.
+    await startProfileChangeRequest({
+      subjectWorkerId: "E0004", initiatorId: "E0004",
+      requestedChange: "Update home address on file — moved within the Bay Area.",
+    });
+
+    // E: Manager-initiated profile change on behalf of a report -> routes
+    // to HR Partner (E0301) instead, since the initiator holds Manager.
+    if (reportOfE0002) {
+      await startProfileChangeRequest({
+        subjectWorkerId: reportOfE0002, initiatorId: "E0002",
+        requestedChange: "Correct legal name spelling per updated passport.",
+      });
+    }
+    console.log("Seeded demo BP instances (Worker Data Change x3, Profile Change Request x2).");
+  } catch (e) {
+    console.warn("Demo BP instance seeding skipped part-way (non-fatal):", e instanceof Error ? e.message : e);
+  }
 
   // ---------- Summary ----------
   const current = workers.filter((w) => w.status !== "TERMINATED");

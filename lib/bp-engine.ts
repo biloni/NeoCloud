@@ -7,6 +7,7 @@ import { prisma } from "./prisma";
 import { getWorkforceSnapshot } from "./snapshot";
 import { LEVEL_ORDER } from "./reference-data";
 import type { AssigneeRule, StepAction } from "./enums";
+import { resolveRolesForWorker, getFixedAssignee, Role } from "@/security/roles";
 
 function evaluateCondition(rule: string, ctx: Record<string, number>): boolean {
   const m = rule.match(/^(\w+)\s*(>=|<=|>|<|==)\s*(-?\d+(?:\.\d+)?)$/);
@@ -30,7 +31,7 @@ async function resolveOrgRole(department: string, rank: number): Promise<string>
   const snapshot = await getWorkforceSnapshot();
   const rankOf = (lvl: string) => LEVEL_ORDER.indexOf(lvl as any);
   const candidates = snapshot
-    .filter((r) => r.department === department && r.status === "ACTIVE")
+    .filter((r) => r.department === department && r.status === "ACTIVE" && r.workerId !== "E0000")
     .sort((a, b) => rankOf(b.level) - rankOf(a.level) || a.workerId.localeCompare(b.workerId));
   return candidates[rank]?.workerId ?? candidates[0]?.workerId ?? "E0000";
 }
@@ -39,6 +40,14 @@ async function resolveAssignee(rule: AssigneeRule, subjectWorkerId: string, init
   if (rule === "INITIATOR") return initiatorId;
   if (rule === "HR_PARTNER") return resolveOrgRole("G&A", 0);
   if (rule === "COMP_PARTNER") return resolveOrgRole("G&A", 1);
+  if (rule === "ROUTE_BASED_APPROVER") {
+    // RBAC routing table (security/README.md "Workflow authorization"):
+    // Employee-initiated -> HR Ops; Manager/Skip-Level-initiated -> HR Partner.
+    const initiatorRoles = await resolveRolesForWorker(initiatorId);
+    const initiatedByManager = initiatorRoles.includes(Role.MANAGER) || initiatorRoles.includes(Role.SKIP_LEVEL_MANAGER);
+    const targetRole = initiatedByManager ? Role.HR_PARTNER : Role.HR_OPS;
+    return getFixedAssignee(targetRole) ?? "E0000";
+  }
   const snapshot = await getWorkforceSnapshot();
   const subject = snapshot.find((r) => r.workerId === subjectWorkerId);
   const managerId = subject?.managerId ?? "E0000";
@@ -48,6 +57,68 @@ async function resolveAssignee(rule: AssigneeRule, subjectWorkerId: string, init
     return manager?.managerId ?? "E0000";
   }
   return "E0000";
+}
+
+/**
+ * Shared instance+step creation, used by every BpDefinition this engine
+ * runs. Creates the BpInstance, auto-approves the "Initiate" step, and
+ * resolves+creates every subsequent step (PENDING, or SKIPPED_BY_RULE if
+ * it has a conditionRule that doesn't pass against `conditionContext`).
+ * Extracted so a new workflow (e.g. Profile Change Request) never
+ * re-implements this loop.
+ */
+async function createBpInstanceWithSteps(
+  definitionId: string,
+  subjectWorkerId: string,
+  initiatorId: string,
+  proposedChange: Record<string, unknown>,
+  conditionContext: Record<string, number> = {}
+) {
+  const definition = await prisma.bpDefinition.findUniqueOrThrow({
+    where: { id: definitionId },
+    include: { steps: { orderBy: { order: "asc" } } },
+  });
+
+  const instance = await prisma.bpInstance.create({
+    data: {
+      definitionId: definition.id,
+      subjectWorkerId,
+      initiatorId,
+      status: "IN_PROGRESS",
+      proposedChange: JSON.stringify(proposedChange),
+    },
+  });
+
+  for (const step of definition.steps) {
+    if (step.name === "Initiate") {
+      await prisma.bpStepInstance.create({
+        data: {
+          instanceId: instance.id, order: step.order, stepName: step.name,
+          assigneeId: initiatorId, action: "APPROVED", actedAt: new Date(),
+          comment: "Initiated",
+        },
+      });
+      continue;
+    }
+    const assigneeId = await resolveAssignee(step.assigneeRule as AssigneeRule, subjectWorkerId, initiatorId);
+    if (step.conditionRule) {
+      const passes = evaluateCondition(step.conditionRule, conditionContext);
+      if (!passes) {
+        await prisma.bpStepInstance.create({
+          data: {
+            instanceId: instance.id, order: step.order, stepName: step.name, assigneeId,
+            action: "SKIPPED_BY_RULE", actedAt: new Date(), comment: `Condition not met: ${step.conditionRule}`,
+          },
+        });
+        continue;
+      }
+    }
+    await prisma.bpStepInstance.create({
+      data: { instanceId: instance.id, order: step.order, stepName: step.name, assigneeId, action: "PENDING" },
+    });
+  }
+
+  return instance;
 }
 
 export interface StartChangeInput {
@@ -90,51 +161,42 @@ export async function startWorkerDataChange(input: StartChangeInput) {
     };
   }
 
-  const definition = await prisma.bpDefinition.findUniqueOrThrow({
-    where: { id: "BP-WORKER-DATA-CHANGE" },
-    include: { steps: { orderBy: { order: "asc" } } },
-  });
+  return createBpInstanceWithSteps(
+    "BP-WORKER-DATA-CHANGE",
+    input.subjectWorkerId,
+    input.initiatorId,
+    proposedChange,
+    { compChangePct: Math.abs(compChangePct) }
+  );
+}
 
-  const instance = await prisma.bpInstance.create({
-    data: {
-      definitionId: definition.id,
-      subjectWorkerId: input.subjectWorkerId,
-      initiatorId: input.initiatorId,
-      status: "IN_PROGRESS",
-      proposedChange: JSON.stringify(proposedChange),
-    },
-  });
+export interface StartProfileChangeInput {
+  subjectWorkerId: string;
+  initiatorId: string;
+  requestedChange: string; // free-text description, e.g. "Update phone number to ..."
+}
 
-  for (const step of definition.steps) {
-    if (step.name === "Initiate") {
-      await prisma.bpStepInstance.create({
-        data: {
-          instanceId: instance.id, order: step.order, stepName: step.name,
-          assigneeId: input.initiatorId, action: "APPROVED", actedAt: new Date(),
-          comment: "Initiated",
-        },
-      });
-      continue;
-    }
-    const assigneeId = await resolveAssignee(step.assigneeRule as AssigneeRule, input.subjectWorkerId, input.initiatorId);
-    if (step.conditionRule) {
-      const passes = evaluateCondition(step.conditionRule, { compChangePct: Math.abs(compChangePct) });
-      if (!passes) {
-        await prisma.bpStepInstance.create({
-          data: {
-            instanceId: instance.id, order: step.order, stepName: step.name, assigneeId,
-            action: "SKIPPED_BY_RULE", actedAt: new Date(), comment: `Condition not met: ${step.conditionRule}`,
-          },
-        });
-        continue;
-      }
-    }
-    await prisma.bpStepInstance.create({
-      data: { instanceId: instance.id, order: step.order, stepName: step.name, assigneeId, action: "PENDING" },
-    });
-  }
+/**
+ * The Employee-submitted "Profile Change Request" workflow — a second
+ * BpDefinition reusing this same generic engine (see CLAUDE.md: "the
+ * engine could run others"). Routing: Employee-initiated -> HR Ops;
+ * Manager/Skip-Level-initiated (editing a report's data) -> HR Partner —
+ * resolved dynamically per instance by the ROUTE_BASED_APPROVER assignee
+ * rule (see resolveAssignee above), based on the INITIATOR's role at the
+ * moment they submit.
+ */
+export async function startProfileChangeRequest(input: StartProfileChangeInput) {
+  const snapshot = await getWorkforceSnapshot();
+  const subject = snapshot.find((r) => r.workerId === input.subjectWorkerId);
+  if (!subject) throw new Error(`Subject worker ${input.subjectWorkerId} not found or not currently active`);
+  if (!input.requestedChange.trim()) throw new Error("Describe the requested change");
 
-  return instance;
+  const proposedChange = {
+    changeType: "PROFILE_CHANGE",
+    requestedChange: input.requestedChange.trim(),
+  };
+
+  return createBpInstanceWithSteps("BP-PROFILE-CHANGE-REQUEST", input.subjectWorkerId, input.initiatorId, proposedChange);
 }
 
 async function executeCompletion(instanceId: string, completeStepId: string) {
@@ -185,6 +247,10 @@ async function executeCompletion(instanceId: string, completeStepId: string) {
     await prisma.workerEvent.create({
       data: { workerId: instance.subjectWorkerId, type: "TRANSFER", effectiveDate: now, payload: JSON.stringify(change), bpInstanceId: instanceId },
     });
+  } else if (change.changeType === "PROFILE_CHANGE") {
+    await prisma.workerEvent.create({
+      data: { workerId: instance.subjectWorkerId, type: "PROFILE_CHANGE", effectiveDate: now, payload: JSON.stringify(change), bpInstanceId: instanceId },
+    });
   }
 
   await prisma.bpStepInstance.update({ where: { id: completeStepId }, data: { action: "APPROVED", actedAt: now, comment: "Auto-completed by system" } });
@@ -234,6 +300,39 @@ export async function getInbox(workerId: string) {
   return result;
 }
 
+export interface EnrichedInboxItem {
+  stepInstanceId: string;
+  stepName: string;
+  instanceId: string;
+  subjectWorkerId: string;
+  subjectName: string;
+  initiatorName: string;
+  proposedChange: Record<string, any>;
+}
+
+/**
+ * getInbox() plus worker-name resolution — the exact enrichment both
+ * /processes and /inbox need, extracted once so neither page re-implements
+ * the name-lookup pass.
+ */
+export async function getEnrichedInbox(workerId: string): Promise<EnrichedInboxItem[]> {
+  const raw = await getInbox(workerId);
+  const ids = new Set<string>();
+  raw.forEach((s) => { ids.add(s.instance.subjectWorkerId); ids.add(s.instance.initiatorId); });
+  const workers = await prisma.worker.findMany({ where: { id: { in: Array.from(ids) } } });
+  const nameById = new Map(workers.map((w) => [w.id, w.legalName]));
+
+  return raw.map((s) => ({
+    stepInstanceId: s.id,
+    stepName: s.stepName,
+    instanceId: s.instanceId,
+    subjectWorkerId: s.instance.subjectWorkerId,
+    subjectName: nameById.get(s.instance.subjectWorkerId) ?? s.instance.subjectWorkerId,
+    initiatorName: nameById.get(s.instance.initiatorId) ?? s.instance.initiatorId,
+    proposedChange: JSON.parse(s.instance.proposedChange),
+  }));
+}
+
 export async function getAllInstances() {
   return prisma.bpInstance.findMany({
     include: { definition: true, subjectWorker: true, initiator: true, stepInstances: { orderBy: { order: "asc" }, include: { assignee: true } } },
@@ -245,5 +344,20 @@ export async function getInstance(id: string) {
   return prisma.bpInstance.findUnique({
     where: { id },
     include: { definition: true, subjectWorker: true, initiator: true, stepInstances: { orderBy: { order: "asc" }, include: { assignee: true } } },
+  });
+}
+
+/** Every BP instance touching this worker — as the subject, the initiator, or an assignee on any step. Powers the "Approval Requests" tab on the worker profile. */
+export async function getInstancesForWorker(workerId: string) {
+  return prisma.bpInstance.findMany({
+    where: {
+      OR: [
+        { subjectWorkerId: workerId },
+        { initiatorId: workerId },
+        { stepInstances: { some: { assigneeId: workerId } } },
+      ],
+    },
+    include: { definition: true, subjectWorker: true, initiator: true, stepInstances: { orderBy: { order: "asc" }, include: { assignee: true } } },
+    orderBy: { createdAt: "desc" },
   });
 }

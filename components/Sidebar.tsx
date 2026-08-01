@@ -2,18 +2,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Users, GitBranch, LineChart, Wallet, MessageCircleQuestion } from "lucide-react";
+import { NAV_ICON_MAP, type VisibleNavItem } from "@/security/menuVisibility";
+import { HelpCircle } from "lucide-react";
 
-const NAV = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/workers", label: "Workers", icon: Users },
-  { href: "/processes", label: "Processes", icon: GitBranch },
-  { href: "/planning", label: "Planning", icon: LineChart },
-  { href: "/payroll", label: "Payroll", icon: Wallet },
-  { href: "/ask", label: "Ask People OS", icon: MessageCircleQuestion },
-];
-
-export function Sidebar() {
+// Navigation is generated entirely from the authorization engine — see
+// security/menuVisibility.ts. This component renders whatever `menu` it's
+// given; it holds no per-role knowledge of its own.
+export function Sidebar({ menu }: { menu: VisibleNavItem[] }) {
   const pathname = usePathname();
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-border bg-card px-3 py-4">
@@ -22,12 +17,12 @@ export function Sidebar() {
         <div className="text-xs text-muted-foreground">People OS</div>
       </div>
       <nav className="flex flex-1 flex-col gap-0.5">
-        {NAV.map((item) => {
+        {menu.map((item) => {
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-          const Icon = item.icon;
+          const Icon = NAV_ICON_MAP[item.key] ?? HelpCircle;
           return (
             <Link
-              key={item.href}
+              key={item.key}
               href={item.href}
               className={cn(
                 "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",

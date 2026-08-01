@@ -31,7 +31,13 @@ function ChangeSummary({ change }: { change: Record<string, any> }) {
   if (change.changeType === "COMP_CHANGE") {
     return <span>{formatMoney(change.oldSalary, change.oldCurrency)} → {formatMoney(change.newSalary, change.currency)} ({change.compChangePct > 0 ? "+" : ""}{change.compChangePct}%)</span>;
   }
-  return <span>Transfer to {change.newManagerId} · {change.newLocationId}</span>;
+  if (change.changeType === "TRANSFER") {
+    return <span>Transfer to {change.newManagerId} · {change.newLocationId}</span>;
+  }
+  if (change.changeType === "PROFILE_CHANGE") {
+    return <span>{change.requestedChange}</span>;
+  }
+  return <span className="text-muted-foreground">{JSON.stringify(change)}</span>;
 }
 
 export function InstanceList({ instances }: { instances: InstanceRow[] }) {

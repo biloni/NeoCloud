@@ -212,3 +212,31 @@ model Scenario {
   assumptions String // JSON: { hirePlan, attritionByDept, meritByLevel, meritEffectiveDate }
   createdAt   DateTime @default(now())
 }
+
+// ---------- PAYROLL ANOMALY ACKNOWLEDGMENT ----------
+
+model AnomalyAcknowledgment {
+  id             String   @id @default(cuid())
+  anomalyKey     String   @unique // stable per (type, subject, period) — see lib/payroll.ts AnomalyFlag.key
+  acknowledgedBy String // resolved worker id
+  comment        String?
+  createdAt      DateTime @default(now())
+}
+
+// ---------- RBAC: PROXY AUDIT TRAIL ----------
+// Every proxy session start/stop and every action taken while proxying is
+// recorded here — see security/proxy.ts. Append-only, mirrors the
+// effective-dating/audit philosophy used everywhere else in this app
+// (nothing overwrites history — see CLAUDE.md).
+model ProxyAuditLog {
+  id           String   @id @default(cuid())
+  actualUserId String // the real, logged-in-as worker
+  proxyUserId  String // the worker being impersonated
+  action       String // e.g. "PROXY_START", "PROXY_END", "PAGE_VIEW:/payroll", "APPROVE_WORKFLOW"
+  detail       String? // free-form context (route, target worker id, etc.)
+  createdAt    DateTime @default(now())
+
+  @@index([actualUserId])
+  @@index([proxyUserId])
+  @@index([createdAt])
+}

@@ -4,9 +4,7 @@
 "use client";
 import { createContext, useContext, useEffect, useState } from "react";
 import type { PersonaKey } from "./enums";
-
-export const PERSONA_COOKIE = "peopleos_persona";
-export const WORKER_COOKIE = "peopleos_worker";
+import { PERSONA_COOKIE, WORKER_COOKIE } from "./persona-constants";
 
 interface PersonaState {
   persona: PersonaKey;

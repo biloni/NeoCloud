@@ -1,40 +1,26 @@
-import { cookies } from "next/headers";
-import { getInbox, getAllInstances } from "@/lib/bp-engine";
+import { getEnrichedInbox, getAllInstances } from "@/lib/bp-engine";
 import { prisma } from "@/lib/prisma";
-import { Inbox, type InboxItem } from "@/components/processes/Inbox";
+import { Inbox } from "@/components/processes/Inbox";
 import { StartChangeForm } from "@/components/processes/StartChangeForm";
 import { InstanceList, type InstanceRow } from "@/components/processes/InstanceList";
-import { WORKER_COOKIE } from "@/lib/persona";
+import { getAuthContext } from "@/lib/auth-context";
+import { guardRoute } from "@/security/routeGuard";
+import { effectiveWorkerId } from "@/security/authorization";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProcessesPage() {
-  const cookieStore = cookies();
-  const actingWorkerId = (cookieStore.get(WORKER_COOKIE)?.value || "E0001").toUpperCase();
+  const ctx = await getAuthContext();
+  guardRoute(ctx, "/processes", "/home");
+  const actingWorkerId = effectiveWorkerId(ctx);
 
-  const [inboxRaw, instancesRaw] = await Promise.all([getInbox(actingWorkerId), getAllInstances()]);
+  const [inbox, instancesRaw] = await Promise.all([getEnrichedInbox(actingWorkerId), getAllInstances()]);
 
-  const inbox: InboxItem[] = inboxRaw.map((s) => ({
-    stepInstanceId: s.id,
-    stepName: s.stepName,
-    instanceId: s.instanceId,
-    subjectWorkerId: s.instance.subjectWorkerId,
-    subjectName: s.instance.subjectWorkerId,
-    initiatorName: s.instance.initiatorId,
-    proposedChange: JSON.parse(s.instance.proposedChange),
-  }));
-
-  // Enrich names (simple lookups; dataset is small so this is cheap).
+  // Names for the full instance list below (separate from the inbox's own enrichment).
   const allWorkerIds = new Set<string>();
-  inbox.forEach((i) => { allWorkerIds.add(i.subjectWorkerId); allWorkerIds.add(i.initiatorName); });
   instancesRaw.forEach((i) => { allWorkerIds.add(i.subjectWorkerId); allWorkerIds.add(i.initiatorId); i.stepInstances.forEach((s) => allWorkerIds.add(s.assigneeId)); });
   const workers = await prisma.worker.findMany({ where: { id: { in: Array.from(allWorkerIds) } } });
   const nameById = new Map(workers.map((w) => [w.id, w.legalName]));
-
-  for (const item of inbox) {
-    item.subjectName = nameById.get(item.subjectWorkerId) ?? item.subjectWorkerId;
-    item.initiatorName = nameById.get(item.initiatorName) ?? item.initiatorName;
-  }
 
   const instances: InstanceRow[] = instancesRaw.map((inst) => ({
     id: inst.id,

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { TOOL_DEFINITIONS, executeTool } from "@/lib/ai-tools";
+import { getAuthContext } from "@/lib/auth-context";
+import { can } from "@/security/authorization";
+import { Permission } from "@/security/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +35,11 @@ function checkRateLimit(key: string, max = 20, windowMs = 60_000): boolean {
 }
 
 export async function POST(req: Request) {
+  const ctx = await getAuthContext();
+  if (!can(ctx, Permission.VIEW_ASK_PEOPLE_OS)) {
+    return NextResponse.json({ error: "You don't have access to Ask People OS." }, { status: 403 });
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
