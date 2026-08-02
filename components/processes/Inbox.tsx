@@ -26,7 +26,7 @@ function ChangeSummary({ change }: { change: Record<string, any> }) {
   return <span className="text-muted-foreground">{JSON.stringify(change)}</span>;
 }
 
-function ActionRow({ item, actorWorkerId }: { item: InboxItem; actorWorkerId: string }) {
+function ActionRow({ item }: { item: InboxItem }) {
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -37,9 +37,10 @@ function ActionRow({ item, actorWorkerId }: { item: InboxItem; actorWorkerId: st
       setError("A comment is required to deny or send back.");
       return;
     }
+    // actorWorkerId is intentionally NOT sent here — actOnStepAction derives
+    // it server-side from the session (see lib/actions.ts, QA-001 fix).
     const fd = new FormData();
     fd.set("stepInstanceId", item.stepInstanceId);
-    fd.set("actorWorkerId", actorWorkerId);
     fd.set("action", action);
     fd.set("comment", comment);
     startTransition(async () => {
@@ -88,7 +89,7 @@ export function Inbox({ items, actorWorkerId }: { items: InboxItem[]; actorWorke
       <div className="mt-3 flex flex-col gap-3">
         {items.length === 0 && <div className="text-sm text-muted-foreground">Nothing pending for {actorWorkerId} right now.</div>}
         {items.map((item) => (
-          <ActionRow key={item.stepInstanceId} item={item} actorWorkerId={actorWorkerId} />
+          <ActionRow key={item.stepInstanceId} item={item} />
         ))}
       </div>
     </Card>

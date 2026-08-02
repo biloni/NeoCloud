@@ -39,7 +39,12 @@ export const ROUTE_PERMISSIONS: Record<string, Permission | Permission[]> = {
   "/": [Permission.VIEW_EXECUTIVE_DASHBOARD, Permission.VIEW_WORKFORCE_DASHBOARD],
   "/workers": Permission.VIEW_WORKER_DIRECTORY,
   "/org-chart": Permission.VIEW_ORG_CHART,
-  "/processes": [Permission.VIEW_MANAGER_INBOX, Permission.VIEW_APPROVAL_INBOX, Permission.VIEW_HOME_INBOX],
+  // Matches the nav gate in menuVisibility.ts exactly (QA-002 fix — this
+  // previously allowed VIEW_HOME_INBOX, which every role holds via
+  // EMPLOYEE_BASE, making the page universally reachable and disclosing
+  // every worker's Worker Data Change history regardless of role).
+  "/processes": [Permission.EDIT_EMPLOYEE, Permission.APPROVE_WORKFLOW],
+  "/team/reports": Permission.VIEW_DIRECT_REPORTS, // QA-003 fix — was unregistered, so guardRoute no-opped for this route
   "/planning": Permission.VIEW_PLANNING,
   "/planning/compare": Permission.VIEW_PLANNING,
   "/payroll": Permission.VIEW_PAYROLL,

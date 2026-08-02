@@ -72,6 +72,10 @@ const EMPLOYEE_BASE: Permission[] = [
   Permission.VIEW_ORG_CHART,
   Permission.VIEW_PAYCHECK,
   Permission.VIEW_HOME_INBOX,
+  // Every employee gets the People AI Assistant — it's grounded entirely in
+  // tool calls over application data (see lib/ai-tools.ts / api/ask), so
+  // there's no broader data-exposure risk in opening it beyond Exec/Admin.
+  Permission.VIEW_ASK_PEOPLE_OS,
 ];
 
 const MANAGER_ADDITIONS: Permission[] = [
@@ -121,7 +125,6 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.VIEW_WORKFORCE_DASHBOARD,
     Permission.VIEW_WORKER_DIRECTORY,
     Permission.VIEW_PLANNING,
-    Permission.VIEW_ASK_PEOPLE_OS,
     // Deliberately NOT VIEW_PAYROLL — "No Payroll" is explicit in the spec.
   ],
 

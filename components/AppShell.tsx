@@ -57,7 +57,9 @@ export function AppShell({
           proxyEligible={proxyEligible}
         />
         <ProxyBanner />
-        <main className="flex-1 overflow-y-auto scrollbar-thin p-4 sm:p-6">{children}</main>
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto scrollbar-thin p-4 sm:p-6 outline-none">
+          <div key={pathname} className="animate-fade-in-up">{children}</div>
+        </main>
       </div>
     </div>
   );

@@ -15,8 +15,18 @@ import { startProxySession, endProxySession, searchEmployees, type EmployeeSearc
 
 export async function startChangeAction(formData: FormData) {
   const subjectWorkerId = String(formData.get("subjectWorkerId") ?? "").toUpperCase().trim();
-  const initiatorId = String(formData.get("initiatorId") ?? "").toUpperCase().trim();
   const changeType = String(formData.get("changeType") ?? "COMP_CHANGE") as "COMP_CHANGE" | "TRANSFER";
+
+  // Identity comes from the session, never from client-supplied FormData
+  // (QA-001/QA-related fix: the prior version trusted an `initiatorId`
+  // field, so any caller could name themselves as anyone and propose a
+  // change for any worker with no authorization check at all). Mirrors
+  // startProfileChangeAction's already-correct pattern.
+  const ctx = await getAuthContext();
+  const initiatorId = effectiveWorkerId(ctx);
+  if (!(await canEditEmployee(ctx, subjectWorkerId))) {
+    throw new Error("You are not authorized to start a data change for this worker");
+  }
 
   try {
     if (changeType === "COMP_CHANGE") {
@@ -36,9 +46,14 @@ export async function startChangeAction(formData: FormData) {
 
 export async function actOnStepAction(formData: FormData) {
   const stepInstanceId = String(formData.get("stepInstanceId") ?? "");
-  const actorWorkerId = String(formData.get("actorWorkerId") ?? "").toUpperCase().trim();
   const action = String(formData.get("action") ?? "") as "APPROVED" | "DENIED" | "SENT_BACK";
   const comment = String(formData.get("comment") ?? "").trim() || undefined;
+
+  // Identity from the session, not from client-supplied FormData — the BP
+  // audit trail's "who approved this" attribution must be server-verified,
+  // not merely whatever the client claimed (see QA_REPORT.md §6.1).
+  const ctx = await getAuthContext();
+  const actorWorkerId = effectiveWorkerId(ctx);
 
   try {
     await actOnStep(stepInstanceId, actorWorkerId, action, comment);

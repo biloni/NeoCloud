@@ -5,7 +5,20 @@
 import { z } from "zod";
 import { prisma } from "./prisma";
 import { getWorkforceSnapshot } from "./snapshot";
+import { getOrgChartView } from "./orgchart";
 import { LEVEL_ORDER } from "./reference-data";
+
+/** Resolve a worker by ID (E0042) or a case-insensitive substring of their legal name — the model is far more likely to be given a name than an ID. */
+async function resolveWorkerId(idOrName: string): Promise<{ workerId: string; matches: number } | null> {
+  const snapshot = await getWorkforceSnapshot();
+  const asId = idOrName.trim().toUpperCase();
+  const byId = snapshot.find((r) => r.workerId === asId);
+  if (byId) return { workerId: byId.workerId, matches: 1 };
+  const needle = idOrName.trim().toLowerCase();
+  const nameMatches = snapshot.filter((r) => r.legalName.toLowerCase().includes(needle));
+  if (nameMatches.length === 0) return null;
+  return { workerId: nameMatches[0].workerId, matches: nameMatches.length };
+}
 
 const QueryWorkersInput = z.object({
   department: z.string().optional().describe("Filter by department name, e.g. 'Engineering'"),
@@ -138,6 +151,25 @@ async function draftDocumentContext(input: z.infer<typeof DraftDocumentInput>) {
   };
 }
 
+const OrgChartInput = z.object({
+  worker: z.string().describe("A worker's ID (e.g. 'E0004') or legal name (e.g. 'Priya Shah'). If omitted, uses the CEO (E0000) as the top of the org."),
+});
+async function getOrgChart(input: z.infer<typeof OrgChartInput>) {
+  const resolved = await resolveWorkerId(input.worker || "E0000");
+  if (!resolved) return { error: `No active worker found matching "${input.worker}".` };
+  const view = await getOrgChartView(resolved.workerId);
+  if (!view) return { error: `Worker ${resolved.workerId} is not currently active.` };
+  return {
+    resolvedFrom: input.worker,
+    nameMatchCount: resolved.matches,
+    ambiguousMatch: resolved.matches > 1 ? "Multiple workers matched this name; showing the first. Ask for a worker ID if this isn't the right person." : null,
+    center: view.center,
+    reportingLine: view.managerChain.map((m) => `${m.legalName} (${m.workerId}, ${m.level})`),
+    directReports: view.directReports.map((r) => ({ workerId: r.workerId, legalName: r.legalName, level: r.level, department: r.department, ownDirectReportCount: r.directReportCount })),
+    directReportCount: view.directReports.length,
+  };
+}
+
 export const TOOL_DEFINITIONS = [
   {
     name: "query_workers",
@@ -178,7 +210,62 @@ export const TOOL_DEFINITIONS = [
       required: ["type", "workerId"],
     },
   },
+  {
+    name: "get_org_chart",
+    description: "Get a worker's position in the org: their full reporting line up to the CEO, and their direct reports. Use this for any org-chart question — 'who does X report to', 'who manages team Y', 'who are X's direct reports', 'how many people report to X'. Accepts a worker ID or a legal name.",
+    input_schema: {
+      type: "object" as const,
+      properties: { worker: { type: "string", description: "Worker ID (e.g. E0004) or legal name" } },
+      required: ["worker"],
+    },
+  },
 ];
+
+/**
+ * The terminal tool. The model must call this exactly once, as its last
+ * action, instead of ever answering in plain assistant text — see the
+ * system prompt in app/api/ask/route.ts. This is the actual mechanism
+ * behind "structured prompts / prevent hallucinations / display confidence
+ * and citations": rather than trust the model to remember to write a
+ * citations section in prose (which degrades under longer conversations),
+ * the schema makes citing tool results a required field, so the server can
+ * always render confidence + sources the same way, and can tell when a
+ * reply skipped grounding entirely.
+ */
+export const PROVIDE_ANSWER_TOOL = {
+  name: "provide_answer",
+  description:
+    "Deliver your final answer to the user. Always call this as your LAST action — never answer in plain assistant text. If you couldn't fully answer from the available tools, still call this with confidence 'low' and explain what's missing in `answer`.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      answer: {
+        type: "string",
+        description: "The full answer, in markdown, written for an HR/People audience. Use a markdown table for any list of workers.",
+      },
+      confidence: {
+        type: "string",
+        enum: ["high", "medium", "low"],
+        description:
+          "high = every fact came directly from tool results with no ambiguity or truncation. medium = mostly grounded but some inference, truncated results, or an ambiguous name match was involved. low = a tool returned no data / an error, or the question can't be answered from application data at all.",
+      },
+      confidenceReason: { type: "string", description: "One short sentence explaining the confidence level." },
+      citations: {
+        type: "array",
+        description: "One entry per tool call that grounds a fact used in the answer. Empty only if confidence is low and no tool produced usable data.",
+        items: {
+          type: "object",
+          properties: {
+            tool: { type: "string", description: "The tool name that was called, e.g. get_headcount_summary" },
+            detail: { type: "string", description: "What that specific call contributed to the answer, e.g. '350 active workers, grouped by department'" },
+          },
+          required: ["tool", "detail"],
+        },
+      },
+    },
+    required: ["answer", "confidence", "citations"],
+  },
+};
 
 const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   query_workers: QueryWorkersInput,
@@ -186,6 +273,7 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   get_comp_vs_band: CompVsBandInput,
   get_attrition: AttritionInput,
   draft_document: DraftDocumentInput,
+  get_org_chart: OrgChartInput,
 };
 
 const TOOL_IMPLS: Record<string, (input: any) => Promise<unknown>> = {
@@ -194,6 +282,7 @@ const TOOL_IMPLS: Record<string, (input: any) => Promise<unknown>> = {
   get_comp_vs_band: getCompVsBand,
   get_attrition: getAttrition,
   draft_document: draftDocumentContext,
+  get_org_chart: getOrgChart,
 };
 
 export async function executeTool(name: string, rawInput: unknown): Promise<unknown> {

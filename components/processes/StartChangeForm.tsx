@@ -14,7 +14,6 @@ export function StartChangeForm({ initiatorId }: { initiatorId: string }) {
     setError(null);
     setSuccess(false);
     const fd = new FormData(e.currentTarget);
-    fd.set("initiatorId", initiatorId);
     startTransition(async () => {
       try {
         await startChangeAction(fd);

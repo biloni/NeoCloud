@@ -1,13 +1,20 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/AppShell";
 import { PersonaProvider } from "@/components/PersonaProvider";
 import { ProxyProvider } from "@/components/ProxyProvider";
+import { ToastProvider } from "@/components/ui/Toast";
 import { getAuthContext } from "@/lib/auth-context";
 import { getVisibleMenu } from "@/security/menuVisibility";
 import { getDemoPersonaOptions } from "@/security/demoPersonas";
 import { canProxy, effectiveWorkerId, effectiveRoles } from "@/security/authorization";
 import { ROLE_METADATA } from "@/security/roles";
+
+// Self-hosted at build time (next/font) — no runtime request to Google
+// Fonts, so this works offline and doesn't add a render-blocking network
+// hop. Exposed as --font-sans and consumed by tailwind.config.ts.
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
 export const metadata: Metadata = {
   title: "NeoCloud People OS",
@@ -22,21 +29,24 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const roleLabel = roles.map((r) => ROLE_METADATA[r].label).join(" + ") || "Employee";
 
   return (
-    <html lang="en">
+    <html lang="en" className={inter.variable}>
       <body className="font-sans antialiased">
-        <PersonaProvider>
-          <ProxyProvider>
-            <AppShell
-              menu={menu}
-              currentWorkerId={effectiveWorkerId(ctx)}
-              roleLabel={roleLabel}
-              demoOptions={demoOptions}
-              proxyEligible={canProxy(ctx)}
-            >
-              {children}
-            </AppShell>
-          </ProxyProvider>
-        </PersonaProvider>
+        <a href="#main-content" className="skip-link">Skip to main content</a>
+        <ToastProvider>
+          <PersonaProvider>
+            <ProxyProvider>
+              <AppShell
+                menu={menu}
+                currentWorkerId={effectiveWorkerId(ctx)}
+                roleLabel={roleLabel}
+                demoOptions={demoOptions}
+                proxyEligible={canProxy(ctx)}
+              >
+                {children}
+              </AppShell>
+            </ProxyProvider>
+          </PersonaProvider>
+        </ToastProvider>
       </body>
     </html>
   );
