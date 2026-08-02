@@ -20,15 +20,6 @@ interface ChatEntry {
   loading?: boolean;
 }
 
-const EXAMPLES = [
-  "Show me everyone in Engineering hired in the last 12 months whose comp is below the band midpoint",
-  "Who does E0002 report to, and who are their direct reports?",
-  "What's our headcount by department?",
-  "How does comp compare to band for IC4s?",
-  "What's our trailing 12-month attrition rate?",
-  "Draft a promotion announcement for E0004",
-];
-
 const CONFIDENCE_STYLE: Record<string, { label: string; variant: "success" | "warning" | "destructive"; icon: typeof ShieldCheck }> = {
   high: { label: "High confidence", variant: "success", icon: ShieldCheck },
   medium: { label: "Medium confidence", variant: "warning", icon: ShieldQuestion },
@@ -80,7 +71,7 @@ function Citations({ citations }: { citations: Citation[] }) {
   );
 }
 
-export function AskChat() {
+export function AskChat({ examples, framing }: { examples: string[]; framing: string }) {
   const [history, setHistory] = useState<ChatEntry[]>([]);
   const [question, setQuestion] = useState("");
 
@@ -120,9 +111,9 @@ export function AskChat() {
       <div>
         <h1>Ask People OS</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Your People AI Assistant — available to every employee. Ask about headcount, org structure, comp vs.
-          bands, or attrition. Every answer is grounded in live tool calls over this application's real data —
-          never the model's general knowledge — and carries a confidence level plus the sources it used.
+          Your People AI Assistant. {framing} Every answer is grounded in live tool calls over this
+          application's real data — never the model's general knowledge — and carries a confidence level plus
+          the sources it used.
         </p>
       </div>
 
@@ -130,7 +121,7 @@ export function AskChat() {
         <Card className="animate-fade-in-up">
           <CardTitle>Try asking</CardTitle>
           <div className="mt-2 flex flex-wrap gap-2">
-            {EXAMPLES.map((ex) => (
+            {examples.map((ex) => (
               <button
                 key={ex}
                 onClick={() => ask(ex)}

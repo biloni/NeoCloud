@@ -7,6 +7,7 @@ import { prisma } from "./prisma";
 import { getWorkforceSnapshot } from "./snapshot";
 import { getOrgChartView } from "./orgchart";
 import { LEVEL_ORDER } from "./reference-data";
+import { Role, primaryRole } from "@/security/roles";
 
 /** Resolve a worker by ID (E0042) or a case-insensitive substring of their legal name — the model is far more likely to be given a name than an ID. */
 async function resolveWorkerId(idOrName: string): Promise<{ workerId: string; matches: number } | null> {
@@ -220,6 +221,124 @@ export const TOOL_DEFINITIONS = [
     },
   },
 ];
+
+/**
+ * Per-role tool scoping — the AI copilot for each persona gets the toolbox
+ * appropriate to their job, not the full set by default. Additive across a
+ * worker's held roles (a Manager who is also HR Partner gets the union),
+ * matching how every other permission in this app composes. This is a
+ * *purpose* scope, not a data-access scope — it doesn't restrict which rows
+ * a tool can return (that's the documented, separate tradeoff in README.md
+ * "Responsible use"); it restricts which *capabilities* a role's assistant
+ * offers, the same way a real product wouldn't show a Payroll Admin a
+ * "draft a promotion announcement" button.
+ */
+const ROLE_TOOL_ACCESS: Record<Role, string[]> = {
+  [Role.EMPLOYEE]: ["query_workers", "get_org_chart", "get_headcount_summary"],
+  [Role.MANAGER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
+  [Role.SKIP_LEVEL_MANAGER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
+  [Role.HR_OPS]: ["query_workers", "get_org_chart", "get_headcount_summary", "draft_document"],
+  [Role.HR_PARTNER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
+  [Role.FINANCE_PLANNER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition"],
+  [Role.PAYROLL_ADMIN]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band"],
+  [Role.EXECUTIVE]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
+  [Role.SUPER_ADMIN]: TOOL_DEFINITIONS.map((t) => t.name),
+};
+
+/** The union of tools every held role grants, resolved to full tool definitions. provide_answer is added separately by the caller — it's not a data tool. */
+export function getToolsForRoles(roles: Role[]): typeof TOOL_DEFINITIONS {
+  const allowed = new Set<string>();
+  for (const role of roles) for (const name of ROLE_TOOL_ACCESS[role] ?? []) allowed.add(name);
+  return TOOL_DEFINITIONS.filter((t) => allowed.has(t.name));
+}
+
+/**
+ * Per-role persona configuration for Ask People OS — framing sentence and
+ * suggested example prompts, co-located with ROLE_TOOL_ACCESS above so the
+ * three always move together. A framing sentence or example prompt that
+ * implies a capability the role's toolbox doesn't grant (e.g. suggesting
+ * "draft a PIP notice" to a role without draft_document) would be a
+ * regression, not a style choice — every entry below is checked against
+ * ROLE_TOOL_ACCESS[role].
+ */
+const ROLE_FRAMING: Record<Role, string> = {
+  [Role.EMPLOYEE]: "You're helping an individual contributor understand their own role, career growth, comp, and internal opportunities — not filing an HR ticket.",
+  [Role.MANAGER]: "You're helping a people manager triage their own team's health, prepare reviews, and answer workforce questions scoped to their direct reports.",
+  [Role.SKIP_LEVEL_MANAGER]: "You're helping a department leader see organizational health across multiple teams. Stay at the team/org level — individual coaching belongs to the direct manager, not this conversation.",
+  [Role.HR_OPS]: "You're helping HR Operations track case volume, data quality, and process efficiency across the organization.",
+  [Role.HR_PARTNER]: "You're helping an HR Business Partner advise a business unit strategically — talent risk, succession, promotion readiness — not just process the next request.",
+  [Role.FINANCE_PLANNER]: "You're helping Finance connect workforce headcount and compensation decisions to budget impact.",
+  [Role.PAYROLL_ADMIN]: "You're helping Payroll Administration catch compensation anomalies, verify compliance, and keep the payroll run accurate.",
+  [Role.EXECUTIVE]: "You're helping a CEO/CHRO/CFO-level executive with strategic, company-wide workforce questions — growth capacity, talent risk, investment priorities — at the aggregate or department level.",
+  [Role.SUPER_ADMIN]: "You're helping a platform administrator, who may ask about workforce data or about the platform's own access control and AI governance.",
+};
+
+/** The framing sentence for the single most specific role a worker holds — see security/roles.ts primaryRole(). */
+export function getRoleFraming(roles: Role[]): string {
+  return ROLE_FRAMING[primaryRole(roles)];
+}
+
+const EXAMPLE_PROMPTS_BY_ROLE: Record<Role, string[]> = {
+  [Role.EMPLOYEE]: [
+    "Who do I report to, and who are my direct teammates?",
+    "How many people work in my department?",
+    "What's our company's headcount by location?",
+    "Who else is at my level in Engineering?",
+  ],
+  [Role.MANAGER]: [
+    "Who are my direct reports?",
+    "How does comp in my department compare to band?",
+    "What's our company-wide attrition rate this year?",
+    "Draft a promotion announcement for E0004",
+  ],
+  [Role.SKIP_LEVEL_MANAGER]: [
+    "Show me the org structure under E0002",
+    "How does headcount break down across my department?",
+    "How does comp compare to band for senior levels?",
+    "What's our trailing 12-month attrition rate?",
+  ],
+  [Role.HR_OPS]: [
+    "What's our headcount by status — active, on leave, contractor?",
+    "Who's on leave or termination-pending right now?",
+    "Show me everyone hired in the last 3 months",
+    "Draft an offer letter context for E0028",
+  ],
+  [Role.HR_PARTNER]: [
+    "Who in Engineering is below their comp band midpoint?",
+    "What's our trailing 12-month attrition rate?",
+    "Show me the org structure for Engineering leadership",
+    "Draft a promotion announcement for E0004",
+  ],
+  [Role.FINANCE_PLANNER]: [
+    "What's our headcount by department?",
+    "How does comp compare to band across levels?",
+    "What's our trailing 12-month attrition rate?",
+    "Show me everyone hired this year in GPU Cloud",
+  ],
+  [Role.PAYROLL_ADMIN]: [
+    "Show me everyone whose comp is below band midpoint",
+    "What's our headcount by location?",
+    "Who reports to E0002?",
+    "List everyone in GPU Cloud at IC4 or above",
+  ],
+  [Role.EXECUTIVE]: [
+    "What's our total headcount by department?",
+    "What's our trailing 12-month attrition rate?",
+    "How does comp compare to band company-wide?",
+    "Draft a promotion announcement for E0004",
+  ],
+  [Role.SUPER_ADMIN]: [
+    "What's our headcount by department?",
+    "Who reports to E0000?",
+    "Show me comp vs. band for IC4s",
+    "What's our attrition rate this year?",
+  ],
+};
+
+/** Suggested prompts for the single most specific role a worker holds — always answerable with that role's actual tool access. */
+export function getExamplePrompts(roles: Role[]): string[] {
+  return EXAMPLE_PROMPTS_BY_ROLE[primaryRole(roles)];
+}
 
 /**
  * The terminal tool. The model must call this exactly once, as its last

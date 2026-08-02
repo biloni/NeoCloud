@@ -58,6 +58,23 @@ export enum Role {
 
 export const ALL_ROLES: Role[] = Object.values(Role);
 
+/**
+ * Most-specific-first ordering, used anywhere a worker's several held roles
+ * need to collapse to ONE for framing/UX purposes (e.g. which persona
+ * voice the AI assistant uses). This is display/tone only — it never
+ * narrows actual permissions or tool access, which stay the union of every
+ * held role (see ROLE_PERMISSIONS, ai-tools.ts ROLE_TOOL_ACCESS).
+ */
+export const ROLE_PRIORITY: Role[] = [
+  Role.SUPER_ADMIN, Role.EXECUTIVE, Role.HR_PARTNER, Role.FINANCE_PLANNER,
+  Role.PAYROLL_ADMIN, Role.HR_OPS, Role.SKIP_LEVEL_MANAGER, Role.MANAGER, Role.EMPLOYEE,
+];
+
+/** The single most specific role in a held-role set, per ROLE_PRIORITY. Never throws — EMPLOYEE is always a safe fallback since every worker holds it. */
+export function primaryRole(roles: Role[]): Role {
+  return ROLE_PRIORITY.find((r) => roles.includes(r)) ?? Role.EMPLOYEE;
+}
+
 export interface RoleMetadata {
   label: string;
   description: string;
