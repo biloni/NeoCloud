@@ -2,7 +2,7 @@
 
 A lightweight People operations & workforce planning app built for a People Systems Lead take-home exercise. It simulates HRIS workflows for NeoCloud Inc., a fictional ~350-person GPU cloud company preparing for IPO, and mirrors Workday's data and process concepts throughout.
 
-**Live URL:** _add after deployment_ · **Repo:** https://github.com/biloni/NeoCloud
+**Live URL:** https://neo-cloud.vercel.app · **Repo:** https://github.com/biloni/NeoCloud
 
 For deeper detail than fits here — the full Workday concept-mapping table, complete AI guardrail rationale, and "what I'd do differently"/production-translation notes — see [`ARCHITECTURE.md`](ARCHITECTURE.md). The RBAC design lives in [`security/README.md`](security/README.md); adversarial QA findings and fixes in [`QA_REPORT.md`](QA_REPORT.md).
 
