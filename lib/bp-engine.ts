@@ -298,8 +298,17 @@ async function executeCompletion(instanceId: string, completeStepId: string) {
 }
 
 export async function actOnStep(stepInstanceId: string, actorWorkerId: string, action: Extract<StepAction, "APPROVED" | "DENIED" | "SENT_BACK">, comment?: string) {
-  const step = await prisma.bpStepInstance.findUniqueOrThrow({ where: { id: stepInstanceId } });
+  const step = await prisma.bpStepInstance.findUniqueOrThrow({ where: { id: stepInstanceId }, include: { instance: true } });
   if (step.action !== "PENDING") throw new Error("This step has already been resolved");
+  // A DENIED/CANCELED instance can still have other steps sitting at
+  // action="PENDING" — denying/sending-back only stops the instance, it
+  // doesn't retroactively resolve steps that were never reached (see
+  // QA_REPORT-style finding: acting on one of these "zombie" steps was
+  // previously possible and, if it happened to be the second-to-last step,
+  // could have let a dead instance limp to Complete and actually apply a
+  // denied change). The instance's status is the one source of truth for
+  // whether it's still actionable at all.
+  if (step.instance.status !== "IN_PROGRESS") throw new Error("This request is no longer in progress and can't be acted on");
 
   const allSteps = await prisma.bpStepInstance.findMany({ where: { instanceId: step.instanceId }, orderBy: { order: "asc" } });
   const earliestPending = allSteps.find((s) => s.action === "PENDING");
@@ -328,7 +337,11 @@ export async function actOnStep(stepInstanceId: string, actorWorkerId: string, a
 /** Steps assigned to `workerId` where it is actually their turn (all earlier steps in the instance are resolved). */
 export async function getInbox(workerId: string) {
   const candidates = await prisma.bpStepInstance.findMany({
-    where: { assigneeId: workerId, action: "PENDING" },
+    // Excludes steps left at action="PENDING" on an instance that's since
+    // been DENIED/CANCELED — see actOnStep's matching guard. Without this,
+    // a step nobody ever got to act on before the instance died would show
+    // up in someone's inbox forever, looking like it still needs a decision.
+    where: { assigneeId: workerId, action: "PENDING", instance: { status: "IN_PROGRESS" } },
     include: { instance: { include: { definition: true } } },
     orderBy: { createdAt: "asc" },
   });
