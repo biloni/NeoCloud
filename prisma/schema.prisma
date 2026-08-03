@@ -9,8 +9,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Supabase pooler (pgbouncer)
+  directUrl = env("DIRECT_URL") // Supabase direct connection, for migrations
 }
 
 // ---------- DIMENSIONS (master data) ----------
