@@ -24,13 +24,24 @@ export function Sidebar({ menu }: { menu: VisibleNavItem[] }) {
             <Link
               key={item.key}
               href={item.href}
+              title={item.additional ? "Extra access beyond a base Employee's view" : undefined}
               className={cn(
                 "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
-                active ? "bg-accent text-accent-foreground" : "text-foreground/80 hover:bg-muted"
+                active
+                  ? "bg-accent text-accent-foreground"
+                  : item.additional
+                    ? "text-accent hover:bg-accent/10"
+                    : "text-foreground/80 hover:bg-muted"
               )}
             >
               <Icon size={16} />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.additional && (
+                <span
+                  className={cn("h-1.5 w-1.5 shrink-0 rounded-full", active ? "bg-accent-foreground" : "bg-accent")}
+                  aria-hidden="true"
+                />
+              )}
             </Link>
           );
         })}

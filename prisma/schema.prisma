@@ -22,6 +22,14 @@ model Worker {
   countryCode   String // US, CA, GB, IN
   hireDate      DateTime
   status        String // WorkerStatus — derived-cached from events; source of truth is events
+  // Self-service profile photo. Stored as a data: URI directly on the row
+  // rather than in blob storage — this app is local-first with zero
+  // external dependencies (see CLAUDE.md); a real deployment would swap
+  // this for an object-storage URL without changing anything that reads
+  // it, since callers just treat it as an <img src>. Size-capped at the
+  // upload action, not here — SQLite/Postgres both allow arbitrary-length
+  // text columns.
+  photoUrl      String?
 
   positions   PositionAssignment[]
   events      WorkerEvent[]

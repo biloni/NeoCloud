@@ -644,17 +644,19 @@ async function main() {
 
     // D: Employee-initiated profile change on their own record -> routes to
     // HR Ops (E0302), no Manager/Skip-Level role held by the initiator.
+    const e0004 = workers.find((w) => w.id === "E0004");
     await startProfileChangeRequest({
       subjectWorkerId: "E0004", initiatorId: "E0004",
-      requestedChange: "Update home address on file — moved within the Bay Area.",
+      field: "preferredName", newValue: (e0004?.legalName.split(" ")[0]) ?? "Ana",
     });
 
     // E: Manager-initiated profile change on behalf of a report -> routes
     // to HR Partner (E0301) instead, since the initiator holds Manager.
-    if (reportOfE0002) {
+    const reportOfE0002Worker = reportOfE0002 ? workers.find((w) => w.id === reportOfE0002) : undefined;
+    if (reportOfE0002 && reportOfE0002Worker) {
       await startProfileChangeRequest({
         subjectWorkerId: reportOfE0002, initiatorId: "E0002",
-        requestedChange: "Correct legal name spelling per updated passport.",
+        field: "legalName", newValue: `${reportOfE0002Worker.legalName}-Reed`,
       });
     }
     console.log("Seeded demo BP instances (Worker Data Change x3, Profile Change Request x2).");

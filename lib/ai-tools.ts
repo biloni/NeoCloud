@@ -7,6 +7,7 @@ import { prisma } from "./prisma";
 import { getWorkforceSnapshot } from "./snapshot";
 import { getOrgChartView } from "./orgchart";
 import { LEVEL_ORDER } from "./reference-data";
+import { listScenarios, getScenario, projectScenario, getPlanningBaseline } from "./planning";
 import { Role, primaryRole } from "@/security/roles";
 
 /** Resolve a worker by ID (E0042) or a case-insensitive substring of their legal name — the model is far more likely to be given a name than an ID. */
@@ -171,6 +172,47 @@ async function getOrgChart(input: z.infer<typeof OrgChartInput>) {
   };
 }
 
+const ScenarioProjectionInput = z.object({
+  scenario: z.string().describe("A workforce planning scenario's name (e.g. 'Plan of Record', 'IPO Readiness') or a substring of it. Omit to get the list of available scenario names instead of a projection."),
+});
+async function getScenarioProjection(input: z.infer<typeof ScenarioProjectionInput>) {
+  const all = await listScenarios();
+  if (!input.scenario?.trim()) {
+    return { availableScenarios: all.map((s) => s.name) };
+  }
+  const needle = input.scenario.trim().toLowerCase();
+  const match = all.find((s) => s.name.toLowerCase().includes(needle));
+  if (!match) return { error: `No scenario matching "${input.scenario}".`, availableScenarios: all.map((s) => s.name) };
+
+  const scenario = await getScenario(match.id);
+  const [months, baseline] = await Promise.all([projectScenario(scenario.assumptions), getPlanningBaseline()]);
+  const currentHeadcount = baseline.totalHeadcount;
+  // True zero-assumptions current cost (not month-1-of-the-scenario, which
+  // already has that scenario's first-month hires/attrition/merit baked
+  // in) — the same baseline the Planning page itself starts every scenario
+  // projection from, so "current state" here can't quietly drift from what
+  // a human reading the chart sees as month zero.
+  const currentMonthlyCostUsd = baseline.depts.reduce((sum, d) => sum + (d.avgAnnualBurdenedUsd * d.headcount) / 12, 0);
+  const yearEnd = months[months.length - 1];
+
+  return {
+    scenarioName: scenario.name,
+    scenarioDescription: scenario.description,
+    currentHeadcount,
+    currentMonthlyBurdenedCostUsd: Math.round(currentMonthlyCostUsd),
+    twelveMonthProjection: {
+      endingHeadcount: yearEnd?.totalHeadcount ?? currentHeadcount,
+      endingMonthlyBurdenedCostUsd: Math.round(yearEnd?.totalCostUsd ?? 0),
+      endingInternationalPct: yearEnd ? Number(yearEnd.internationalPct.toFixed(1)) : null,
+      headcountByDeptAtYearEnd: yearEnd
+        ? Object.fromEntries(Object.entries(yearEnd.byDept).map(([dept, d]) => [dept, d.headcount]))
+        : {},
+    },
+    headcountDelta: (yearEnd?.totalHeadcount ?? currentHeadcount) - currentHeadcount,
+    monthlyCostDeltaUsd: Math.round((yearEnd?.totalCostUsd ?? 0) - currentMonthlyCostUsd),
+  };
+}
+
 export const TOOL_DEFINITIONS = [
   {
     name: "query_workers",
@@ -220,6 +262,14 @@ export const TOOL_DEFINITIONS = [
       required: ["worker"],
     },
   },
+  {
+    name: "get_scenario_projection",
+    description: "Get a workforce planning scenario's 12-month projection (ending headcount, ending monthly burdened cost, international mix) plus the true current-state baseline to compare it against. Use this for any question about a named scenario (e.g. 'Plan of Record', 'IPO Readiness') or for composing a workforce/cost narrative grounded in a scenario. Call with no `scenario` value first if you don't already know the exact scenario name — it returns the list of available names.",
+    input_schema: {
+      type: "object" as const,
+      properties: { scenario: { type: "string", description: "Scenario name or a substring of it; omit to list available scenarios" } },
+    },
+  },
 ];
 
 /**
@@ -239,9 +289,11 @@ const ROLE_TOOL_ACCESS: Record<Role, string[]> = {
   [Role.SKIP_LEVEL_MANAGER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
   [Role.HR_OPS]: ["query_workers", "get_org_chart", "get_headcount_summary", "draft_document"],
   [Role.HR_PARTNER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
-  [Role.FINANCE_PLANNER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition"],
+  // get_scenario_projection is scoped to the roles that hold VIEW_PLANNING
+  // (permissions.ts) — feature access and tool access shouldn't disagree.
+  [Role.FINANCE_PLANNER]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "get_scenario_projection"],
   [Role.PAYROLL_ADMIN]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band"],
-  [Role.EXECUTIVE]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document"],
+  [Role.EXECUTIVE]: ["query_workers", "get_org_chart", "get_headcount_summary", "get_comp_vs_band", "get_attrition", "draft_document", "get_scenario_projection"],
   [Role.SUPER_ADMIN]: TOOL_DEFINITIONS.map((t) => t.name),
 };
 
@@ -313,7 +365,7 @@ const EXAMPLE_PROMPTS_BY_ROLE: Record<Role, string[]> = {
     "What's our headcount by department?",
     "How does comp compare to band across levels?",
     "What's our trailing 12-month attrition rate?",
-    "Show me everyone hired this year in GPU Cloud",
+    "Write a monthly People Ops update for the CFO based on the Plan of Record scenario",
   ],
   [Role.PAYROLL_ADMIN]: [
     "Show me everyone whose comp is below band midpoint",
@@ -324,7 +376,7 @@ const EXAMPLE_PROMPTS_BY_ROLE: Record<Role, string[]> = {
   [Role.EXECUTIVE]: [
     "What's our total headcount by department?",
     "What's our trailing 12-month attrition rate?",
-    "How does comp compare to band company-wide?",
+    "Write an executive summary based on the IPO Readiness scenario",
     "Draft a promotion announcement for E0004",
   ],
   [Role.SUPER_ADMIN]: [
@@ -393,6 +445,7 @@ const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   get_attrition: AttritionInput,
   draft_document: DraftDocumentInput,
   get_org_chart: OrgChartInput,
+  get_scenario_projection: ScenarioProjectionInput,
 };
 
 const TOOL_IMPLS: Record<string, (input: any) => Promise<unknown>> = {
@@ -402,6 +455,7 @@ const TOOL_IMPLS: Record<string, (input: any) => Promise<unknown>> = {
   get_attrition: getAttrition,
   draft_document: draftDocumentContext,
   get_org_chart: getOrgChart,
+  get_scenario_projection: getScenarioProjection,
 };
 
 export async function executeTool(name: string, rawInput: unknown): Promise<unknown> {

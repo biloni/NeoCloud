@@ -7,6 +7,7 @@ import { HelpCircle } from "lucide-react";
 import { ROLE_METADATA } from "@/security/roles";
 import { prisma } from "@/lib/prisma";
 import { Card, CardTitle, Badge } from "@/components/ui";
+import { ProfilePhotoTaskRow } from "@/components/workers/ProfilePhotoTaskRow";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ export default async function HomePage() {
     getInbox(workerId),
   ]);
   const menu = getVisibleMenu(ctx).filter((m) => m.key !== "home");
+  const taskCount = pendingSteps.length + (worker?.photoUrl ? 0 : 1);
 
   return (
     <div className="flex flex-col gap-6">
@@ -40,10 +42,11 @@ export default async function HomePage() {
       <Card>
         <div className="flex items-center justify-between">
           <CardTitle>My Tasks</CardTitle>
-          {pendingSteps.length > 0 && <Badge variant="warning">{pendingSteps.length} pending</Badge>}
+          {taskCount > 0 && <Badge variant="warning">{taskCount} pending</Badge>}
         </div>
         <div className="mt-3 flex flex-col gap-2">
-          {pendingSteps.length === 0 && <p className="text-sm text-muted-foreground">Nothing pending right now.</p>}
+          {taskCount === 0 && <p className="text-sm text-muted-foreground">Nothing pending right now.</p>}
+          {!worker?.photoUrl && <ProfilePhotoTaskRow />}
           {pendingSteps.slice(0, 5).map((s) => (
             <div key={s.id} className="flex items-center justify-between rounded-md border border-border p-2 text-sm">
               <span>{s.stepName} — {s.instance.subjectWorkerId}</span>

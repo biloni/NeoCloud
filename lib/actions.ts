@@ -1,6 +1,7 @@
 "use server";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
+import { prisma } from "./prisma";
 import { startWorkerDataChange, actOnStep, startProfileChangeRequest } from "./bp-engine";
 import { createScenario, updateScenario, duplicateScenario, deleteScenario, type ScenarioAssumptions } from "./planning";
 import { createHire } from "./hire";
@@ -75,19 +76,43 @@ export async function startProfileChangeAction(formData: FormData) {
   const ctx = await getAuthContext();
   const initiatorId = effectiveWorkerId(ctx);
   const subjectWorkerId = (String(formData.get("subjectWorkerId") ?? "").toUpperCase().trim()) || initiatorId;
-  const requestedChange = String(formData.get("requestedChange") ?? "").trim();
+  const field = String(formData.get("field") ?? "") as "legalName" | "preferredName";
+  const newValue = String(formData.get("newValue") ?? "").trim();
 
   if (subjectWorkerId !== initiatorId && !(await canEditEmployee(ctx, subjectWorkerId))) {
     throw new Error("You are not authorized to request a profile change for this worker");
   }
+  if (field !== "legalName" && field !== "preferredName") {
+    throw new Error("Choose which field to change");
+  }
 
   try {
-    await startProfileChangeRequest({ subjectWorkerId, initiatorId, requestedChange });
+    await startProfileChangeRequest({ subjectWorkerId, initiatorId, field, newValue });
   } catch (e) {
     throw new Error(e instanceof Error ? e.message : "Failed to submit profile change request");
   }
   revalidatePath(`/workers/${subjectWorkerId}`);
   revalidatePath("/inbox");
+  revalidatePath("/home");
+}
+
+// Self-service profile photo upload — every persona gets this as a "My
+// Tasks" prompt on /home (see app/home/page.tsx) until they upload one.
+// Deliberately self-only (no on-behalf-of case, unlike Worker Data Change
+// or Profile Change Request): a photo isn't governed data, so there's no
+// approval step — it applies immediately, same as any other
+// EDIT_OWN_PROFILE action.
+const MAX_PHOTO_DATA_URL_LENGTH = 2_800_000; // ~2MB source image, base64-inflated (~1.37x) plus data: URI prefix
+export async function uploadProfilePhotoAction(dataUrl: string): Promise<void> {
+  const ctx = await getAuthContext();
+  const workerId = effectiveWorkerId(ctx);
+
+  if (!dataUrl.startsWith("data:image/")) throw new Error("Please choose an image file");
+  if (dataUrl.length > MAX_PHOTO_DATA_URL_LENGTH) throw new Error("That image is too large — please choose a photo under 2MB");
+
+  await prisma.worker.update({ where: { id: workerId }, data: { photoUrl: dataUrl } });
+  revalidatePath(`/workers/${workerId}`);
+  revalidatePath("/profile");
   revalidatePath("/home");
 }
 

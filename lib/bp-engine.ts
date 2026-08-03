@@ -38,8 +38,19 @@ async function resolveOrgRole(department: string, rank: number): Promise<string>
 
 async function resolveAssignee(rule: AssigneeRule, subjectWorkerId: string, initiatorId: string): Promise<string> {
   if (rule === "INITIATOR") return initiatorId;
-  if (rule === "HR_PARTNER") return resolveOrgRole("G&A", 0);
-  if (rule === "COMP_PARTNER") return resolveOrgRole("G&A", 1);
+  // HR_PARTNER/COMP_PARTNER used to resolve via resolveOrgRole (seniority
+  // ranking within G&A) — a leftover from before the RBAC build added
+  // fixed, persona-switcher-reachable role assignments. That meant an
+  // approval step could land on a worker who isn't one of the 9 selectable
+  // demo personas at all, making the step permanently unapprovable through
+  // the UI. HR_PARTNER now routes to the same fixed HR Partner every other
+  // flow uses (E0301). There's no dedicated "Comp Partner" role in the
+  // 9-persona RBAC model, so COMP_PARTNER routes to Finance Planner —
+  // compensation/budget governance is the closest real fit, and it keeps
+  // Comp Partner Review a genuinely distinct approver from HR Partner
+  // Approval rather than coincidentally collapsing onto the same person.
+  if (rule === "HR_PARTNER") return getFixedAssignee(Role.HR_PARTNER) ?? resolveOrgRole("G&A", 0);
+  if (rule === "COMP_PARTNER") return getFixedAssignee(Role.FINANCE_PLANNER) ?? resolveOrgRole("G&A", 1);
   if (rule === "ROUTE_BASED_APPROVER") {
     // RBAC routing table (security/README.md "Workflow authorization"):
     // Employee-initiated -> HR Ops; Manager/Skip-Level-initiated -> HR Partner.
@@ -170,10 +181,17 @@ export async function startWorkerDataChange(input: StartChangeInput) {
   );
 }
 
+export type ProfileChangeField = "legalName" | "preferredName";
+const PROFILE_FIELD_LABEL: Record<ProfileChangeField, string> = {
+  legalName: "Legal name",
+  preferredName: "Preferred name",
+};
+
 export interface StartProfileChangeInput {
   subjectWorkerId: string;
   initiatorId: string;
-  requestedChange: string; // free-text description, e.g. "Update phone number to ..."
+  field: ProfileChangeField;
+  newValue: string;
 }
 
 /**
@@ -184,16 +202,30 @@ export interface StartProfileChangeInput {
  * resolved dynamically per instance by the ROUTE_BASED_APPROVER assignee
  * rule (see resolveAssignee above), based on the INITIATOR's role at the
  * moment they submit.
+ *
+ * `field`/`newValue` are structured (not free text) specifically so
+ * approval can actually DO something — see executeCompletion's
+ * PROFILE_CHANGE branch below. A free-text "change my name to X" request
+ * can be approved but never mechanically applied; a structured field+value
+ * pair can. `requestedChange` is still computed here as a human-readable
+ * summary purely for display (Inbox/InstanceList render it directly).
  */
 export async function startProfileChangeRequest(input: StartProfileChangeInput) {
   const snapshot = await getWorkforceSnapshot();
   const subject = snapshot.find((r) => r.workerId === input.subjectWorkerId);
   if (!subject) throw new Error(`Subject worker ${input.subjectWorkerId} not found or not currently active`);
-  if (!input.requestedChange.trim()) throw new Error("Describe the requested change");
+  const newValue = input.newValue.trim();
+  if (!newValue) throw new Error("Enter the new value");
+
+  const worker = await prisma.worker.findUniqueOrThrow({ where: { id: input.subjectWorkerId } });
+  const oldValue = (worker[input.field] as string | null) ?? "";
 
   const proposedChange = {
     changeType: "PROFILE_CHANGE",
-    requestedChange: input.requestedChange.trim(),
+    field: input.field,
+    oldValue,
+    newValue,
+    requestedChange: `${PROFILE_FIELD_LABEL[input.field]}: "${oldValue}" → "${newValue}"`,
   };
 
   return createBpInstanceWithSteps("BP-PROFILE-CHANGE-REQUEST", input.subjectWorkerId, input.initiatorId, proposedChange);
@@ -248,6 +280,14 @@ async function executeCompletion(instanceId: string, completeStepId: string) {
       data: { workerId: instance.subjectWorkerId, type: "TRANSFER", effectiveDate: now, payload: JSON.stringify(change), bpInstanceId: instanceId },
     });
   } else if (change.changeType === "PROFILE_CHANGE") {
+    // Approval must actually change the record, not just log that it was
+    // approved — see startProfileChangeRequest's doc comment. field is
+    // always "legalName" | "preferredName" (typed at submission time), so
+    // this is a safe, bounded set of columns to write, never arbitrary.
+    await prisma.worker.update({
+      where: { id: instance.subjectWorkerId },
+      data: { [change.field]: change.newValue },
+    });
     await prisma.workerEvent.create({
       data: { workerId: instance.subjectWorkerId, type: "PROFILE_CHANGE", effectiveDate: now, payload: JSON.stringify(change), bpInstanceId: instanceId },
     });

@@ -7,6 +7,7 @@ import { getInstancesForWorker } from "@/lib/bp-engine";
 import { Card, CardTitle, Badge, Table, Th, Td, EmptyState } from "@/components/ui";
 import { ProfileTabs, type ProfileTab } from "@/components/workers/ProfileTabs";
 import { ProfileChangeRequestForm } from "@/components/workers/ProfileChangeRequestForm";
+import { ProfilePhotoUpload } from "@/components/workers/ProfilePhotoUpload";
 import { formatDate, formatMoney, formatUSD } from "@/lib/utils";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { getAuthContext } from "@/lib/auth-context";
@@ -58,8 +59,14 @@ export default async function WorkerDetailPage({ params }: { params: { id: strin
   const timeline = [
     ...compRecords.map((c) => ({
       date: c.effectiveFrom,
-      kind: "Compensation" as const,
-      label: `${c.reason}: ${formatMoney(Number(c.annualSalary), c.currency)}/yr`,
+      // A promotion is a CompRecord with reason "PROMOTION" (see
+      // lib/bp-engine.ts executeCompletion — any approved comp change >10%
+      // is recorded this way). Surfacing it as its own kind here, instead
+      // of folding it into "Compensation," is what makes it show up as a
+      // distinct, visible event in this table rather than looking like a
+      // routine adjustment.
+      kind: c.reason === "PROMOTION" ? ("Promotion" as const) : ("Compensation" as const),
+      label: c.reason === "PROMOTION" ? `Promoted — new comp ${formatMoney(Number(c.annualSalary), c.currency)}/yr` : `${c.reason}: ${formatMoney(Number(c.annualSalary), c.currency)}/yr`,
       detail: c.effectiveTo ? `Effective ${formatDate(c.effectiveFrom)} → ${formatDate(c.effectiveTo)}` : `Effective ${formatDate(c.effectiveFrom)} → current`,
     })),
     ...assignments.map((a) => ({
@@ -80,24 +87,26 @@ export default async function WorkerDetailPage({ params }: { params: { id: strin
   const overviewContent = (
     <div className="flex flex-col gap-4">
       <Card>
-        <p className="mb-3 text-xs text-muted-foreground">
-          Every row below is a distinct record with its own effective date range — nothing here was
-          overwritten in place. Compensation, position, and events are separate append-only tables.
-        </p>
-        <ol className="flex flex-col gap-2 border-l border-border pl-4">
-          {timeline.map((t, i) => (
-            <li key={i} className="relative">
-              <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-accent" />
-              <div className="flex items-baseline gap-2">
-                <span className="text-xs font-medium text-muted-foreground">{formatDate(t.date)}</span>
-                <Badge variant={t.kind === "Compensation" ? "accent" : t.kind === "Position" ? "default" : "warning"}>{t.kind}</Badge>
-              </div>
-              <div className="text-sm font-medium">{t.label}</div>
-              {t.detail && <div className="text-xs text-muted-foreground">{t.detail}</div>}
-            </li>
-          ))}
-          {timeline.length === 0 && <li className="text-sm text-muted-foreground">No history recorded.</li>}
-        </ol>
+        <Table>
+          <thead>
+            <tr><Th>Date</Th><Th>Type</Th><Th>Record</Th><Th>Detail</Th></tr>
+          </thead>
+          <tbody>
+            {timeline.map((t, i) => (
+              <tr key={i}>
+                <Td className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(t.date)}</Td>
+                <Td>
+                  <Badge variant={t.kind === "Promotion" ? "success" : t.kind === "Compensation" ? "accent" : t.kind === "Position" ? "default" : "warning"}>
+                    {t.kind}
+                  </Badge>
+                </Td>
+                <Td className="font-medium">{t.label}</Td>
+                <Td className="text-xs text-muted-foreground">{t.detail}</Td>
+              </tr>
+            ))}
+            {timeline.length === 0 && <tr><Td colSpan={4} className="text-center text-muted-foreground">No history recorded.</Td></tr>}
+          </tbody>
+        </Table>
       </Card>
       {(isSelf || canEdit) && <ProfileChangeRequestForm subjectWorkerId={workerId} isSelf={isSelf} />}
     </div>
@@ -167,36 +176,6 @@ export default async function WorkerDetailPage({ params }: { params: { id: strin
         </tbody>
       </Table>
     </Card>
-  );
-
-  // ---------- Promotion history ----------
-  const promotions = compRecords.filter((c) => c.reason === "PROMOTION");
-  const promotionContent = (
-    <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted-foreground">
-        A "promotion" here is any compensation change flagged &gt;10% at approval time (see the Worker
-        Data Change business process) — this demo tracks it as a comp event, not a separate title/level
-        change, since the seed data doesn't model level progression independently.
-      </p>
-      {promotions.length === 0 ? (
-        <EmptyState>No promotions on record.</EmptyState>
-      ) : (
-        <Card>
-          <Table>
-            <thead><tr><Th>Date</Th><Th>New comp</Th><Th>Currency</Th></tr></thead>
-            <tbody>
-              {promotions.map((c) => (
-                <tr key={c.id}>
-                  <Td>{formatDate(c.effectiveFrom)}</Td>
-                  <Td className="font-medium">{formatMoney(Number(c.annualSalary), c.currency)}</Td>
-                  <Td>{c.currency}</Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
-      )}
-    </div>
   );
 
   // ---------- Leave history ----------
@@ -284,7 +263,6 @@ export default async function WorkerDetailPage({ params }: { params: { id: strin
     { key: "overview", label: "Overview", content: overviewContent },
     { key: "manager", label: "Manager", content: managerContent },
     { key: "compensation", label: "Compensation", count: compRecords.length, content: compensationContent },
-    { key: "promotions", label: "Promotions", count: promotions.length, content: promotionContent },
     { key: "leave", label: "Leave", content: leaveContent },
     { key: "transactions", label: "Transactions", count: events.length, content: transactionsContent },
     { key: "approvals", label: "Approval Requests", count: bpInstances.length, content: approvalContent },
@@ -297,9 +275,12 @@ export default async function WorkerDetailPage({ params }: { params: { id: strin
       </Link>
 
       <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{worker.legalName}</h1>
-          <p className="text-sm text-muted-foreground">{workerId} · {current?.department ?? "—"} · {current?.locationName ?? "—"}</p>
+        <div className="flex items-center gap-3">
+          <ProfilePhotoUpload photoUrl={worker.photoUrl} legalName={worker.legalName} editable={isSelf} />
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">{worker.legalName}</h1>
+            <p className="text-sm text-muted-foreground">{workerId} · {current?.department ?? "—"} · {current?.locationName ?? "—"}</p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {canEdit && workerId !== effectiveWorkerId(ctx) && (

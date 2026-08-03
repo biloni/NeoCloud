@@ -51,10 +51,16 @@ export async function getDemoPersonaOptions(): Promise<DemoPersonaOption[]> {
   for (const row of snapshot) {
     if (row.status !== "ACTIVE" || usedIds.has(row.workerId)) continue;
     const isSkipLevel = await hasIndirectReports(row.workerId);
-    const isManager = isSkipLevel || (await hasDirectReports(row.workerId));
+    // A "pure" manager for demo purposes: has direct reports, but none of
+    // those reports themselves manage anyone — otherwise this worker also
+    // legitimately qualifies as Skip Level Manager (roles are additive, see
+    // roles.ts), and picking them for the plain "Manager" persona makes the
+    // top bar show all three roles at once, which reads as a bug even
+    // though the underlying RBAC is correct.
+    const isPureManager = !isSkipLevel && (await hasDirectReports(row.workerId));
     if (isSkipLevel && !skipLevelId) skipLevelId = row.workerId;
-    else if (isManager && !managerId) managerId = row.workerId;
-    else if (!isManager && !employeeId) employeeId = row.workerId;
+    else if (isPureManager && !managerId) managerId = row.workerId;
+    else if (!isSkipLevel && !isPureManager && !employeeId) employeeId = row.workerId;
     if (employeeId && managerId && skipLevelId) break;
   }
 

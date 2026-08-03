@@ -13,6 +13,23 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
 const MAX_TOOL_ROUNDS = 4;
 
 /**
+ * Defensive cleanup for provide_answer's `answer` field. Observed in
+ * testing: on long, tool-heavy generations (e.g. the workforce narrative
+ * generator, which chains several tool calls before composing prose), the
+ * model has occasionally appended a stray raw fragment resembling its own
+ * tool-call syntax (e.g. `</answer><parameter name="confidence">high`) onto
+ * the end of otherwise-good answer text. Rather than trust every future
+ * generation never does this, strip anything from the first such fragment
+ * onward before it ever reaches a user — the answer text should always be
+ * prose, never markup.
+ */
+function sanitizeAnswer(answer?: string): string | undefined {
+  if (!answer) return answer;
+  const cutIndex = answer.search(/<\/?(answer|parameter|provide_answer)\b/i);
+  return cutIndex === -1 ? answer : answer.slice(0, cutIndex).trimEnd();
+}
+
+/**
  * Who's actually asking, stated as facts (never as an instruction) so
  * "my team" / "who do I report to" resolve without the model guessing.
  * This is the ONLY non-tool-sourced data the model ever sees, which is why
@@ -130,7 +147,14 @@ export async function POST(req: Request) {
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const response = await client.messages.create({
         model: MODEL,
-        max_tokens: 1500,
+        // 1500 was enough for a short lookup answer but not for a request
+        // that both orchestrates several tool calls AND composes a
+        // multi-paragraph narrative (e.g. the workforce-narrative
+        // generator) — it was silently truncating provide_answer's JSON
+        // mid-generation, which could leave `answer` empty even though the
+        // model had gathered the right data. 4096 covers the narrative
+        // case with headroom while still being a bounded, non-runaway limit.
+        max_tokens: 4096,
         system: systemPrompt,
         tools,
         messages: conversation,
@@ -147,7 +171,7 @@ export async function POST(req: Request) {
         const input = finalBlock.input as { answer?: string; confidence?: string; confidenceReason?: string; citations?: { tool: string; detail: string }[] };
         const confidence = input.confidence === "high" || input.confidence === "medium" || input.confidence === "low" ? input.confidence : "low";
         return NextResponse.json({
-          reply: input.answer || "I wasn't able to produce an answer.",
+          reply: sanitizeAnswer(input.answer) || "I wasn't able to produce an answer.",
           confidence,
           confidenceReason: input.confidenceReason,
           citations: Array.isArray(input.citations) ? input.citations : [],

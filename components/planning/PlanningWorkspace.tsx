@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScenarioEditor, type EditableScenario } from "./ScenarioEditor";
+import { NarrativeGenerator } from "./NarrativeGenerator";
 import type { PlanningBaseline } from "@/lib/planning-engine";
 
 export function PlanningWorkspace({
@@ -63,6 +64,8 @@ export function PlanningWorkspace({
           <Plus size={14} /> New scenario
         </button>
       </div>
+
+      <NarrativeGenerator scenarioName={selected?.name ?? null} />
 
       <ScenarioEditor
         key={selected ? selected.id : "new"}

@@ -31,8 +31,17 @@ import {
   Home, UserCircle, Receipt, Inbox as InboxIcon, LayoutGrid, UserPlus, ShieldCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Permission } from "./permissions";
+import { Permission, ROLE_PERMISSIONS } from "./permissions";
+import { Role } from "./roles";
 import { type AuthContext, can, canAny } from "./authorization";
+
+// The baseline every worker gets regardless of role — used to work out
+// which of a role's visible nav items are something EXTRA beyond that
+// baseline (e.g. Planning for Finance Planner), so the sidebar can
+// highlight them. Pulling this from ROLE_PERMISSIONS rather than hardcoding
+// a second list keeps it impossible for the baseline to drift out of sync
+// with EMPLOYEE_BASE in permissions.ts.
+const EMPLOYEE_PERMISSIONS = new Set(ROLE_PERMISSIONS[Role.EMPLOYEE]);
 
 export interface NavItem {
   key: string;
@@ -88,6 +97,15 @@ export interface VisibleNavItem {
   key: string;
   href: string;
   label: string;
+  /** True if this item is visible ONLY because of a permission beyond the Employee baseline — e.g. Planning for Finance Planner. Drives the sidebar's "extra access" highlight. */
+  additional: boolean;
+}
+
+/** True if every permission this item requires is something Employee already has — i.e. Employee sees this item too, so it isn't "extra" for anyone else. Items with no permission (Home) are always baseline. */
+function isBeyondEmployeeBaseline(item: NavItem): boolean {
+  if (!item.permission) return false;
+  const perms = Array.isArray(item.permission) ? item.permission : [item.permission];
+  return !perms.some((p) => EMPLOYEE_PERMISSIONS.has(p));
 }
 
 export function getVisibleMenu(ctx: AuthContext): VisibleNavItem[] {
@@ -98,5 +116,6 @@ export function getVisibleMenu(ctx: AuthContext): VisibleNavItem[] {
     key: item.key,
     href: item.href,
     label: typeof item.label === "function" ? item.label(ctx) : item.label,
+    additional: isBeyondEmployeeBaseline(item),
   }));
 }

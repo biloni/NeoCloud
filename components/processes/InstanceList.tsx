@@ -43,7 +43,7 @@ function ChangeSummary({ change }: { change: Record<string, any> }) {
 export function InstanceList({ instances }: { instances: InstanceRow[] }) {
   return (
     <Card>
-      <CardTitle>All processes ({instances.length})</CardTitle>
+      <CardTitle>Process history ({instances.length})</CardTitle>
       <div className="mt-3 flex flex-col gap-2">
         {instances.map((inst) => (
           <details key={inst.id} className="rounded-lg border border-border">
