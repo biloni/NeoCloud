@@ -11,6 +11,7 @@ export interface HirePlanEntry {
   targetLevel: string;
   count: number;
   startMonth: number; // 1-12, months from today
+  targetLocation?: string; // LOCATIONS id; "" or unset = apportion via the scenario's overall locationMix
 }
 
 export interface TransferEntry {
@@ -126,7 +127,7 @@ export function computeProjection(baseline: PlanningBaseline, assumptions: Scena
   for (let m = 1; m <= 12; m++) {
     const date = new Date(today.getFullYear(), today.getMonth() + m, 1);
     let oneTimeHiringCostUsd = 0;
-    let newHiresThisMonth = 0;
+    let unassignedHiresThisMonth = 0; // hires with no explicit targetLocation — apportioned via locationMix below
 
     // Attrition — deterministic expected-value math, no random draws.
     for (const [deptName, dept] of Object.entries(deptState)) {
@@ -153,12 +154,19 @@ export function computeProjection(baseline: PlanningBaseline, assumptions: Scena
       deptState[dept].levelWeights[hire.targetLevel] = (deptState[dept].levelWeights[hire.targetLevel] ?? 0) + hire.count;
 
       oneTimeHiringCostUsd += hire.count * assumptions.hiringCostPerHireUsd;
-      newHiresThisMonth += hire.count;
+
+      if (hire.targetLocation) {
+        const loc = LOCATIONS.find((l) => l.id === hire.targetLocation);
+        if (loc?.countryCode === "US") domesticHeadcount += hire.count;
+        else internationalHeadcount += hire.count;
+      } else {
+        unassignedHiresThisMonth += hire.count;
+      }
     }
-    // Apportion this month's new hires across countries per the location mix.
+    // Hires without an explicit target location are apportioned across countries per the scenario's location mix.
     for (const [locId, weight] of Object.entries(locWeights)) {
       const loc = LOCATIONS.find((l) => l.id === locId);
-      const hiresHere = newHiresThisMonth * weight;
+      const hiresHere = unassignedHiresThisMonth * weight;
       if (loc?.countryCode === "US") domesticHeadcount += hiresHere;
       else internationalHeadcount += hiresHere;
     }

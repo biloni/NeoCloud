@@ -563,12 +563,16 @@ async function main() {
       description: "Front-loads Engineering hiring ahead of IPO scaling needs, skewed toward lower-cost international locations; slows G&A growth to manage burn.",
       assumptions: JSON.stringify({
         hirePlan: [
-          { department: "Engineering", count: 18, targetLevel: "IC3", startMonth: 1 },
+          // Several Engineering waves pinned to Bangalore/London — the two lower-cost
+          // hubs this scenario is skewed toward — rather than left on the location mix,
+          // so "skewed toward lower-cost international locations" is a literal, per-wave
+          // decision, not just an aggregate mix percentage.
+          { department: "Engineering", count: 18, targetLevel: "IC3", startMonth: 1, targetLocation: "BANGALORE" },
           { department: "Engineering", count: 6, targetLevel: "IC4", startMonth: 2 },
           { department: "GPU Cloud", count: 6, targetLevel: "IC3", startMonth: 1 },
-          { department: "Engineering", count: 16, targetLevel: "IC3", startMonth: 4 },
+          { department: "Engineering", count: 16, targetLevel: "IC3", startMonth: 4, targetLocation: "BANGALORE" },
           { department: "GPU Cloud", count: 5, targetLevel: "IC4", startMonth: 4 },
-          { department: "Engineering", count: 14, targetLevel: "IC3", startMonth: 7 },
+          { department: "Engineering", count: 14, targetLevel: "IC3", startMonth: 7, targetLocation: "LONDON" },
           { department: "On-Prem", count: 3, targetLevel: "IC3", startMonth: 8 },
           { department: "Engineering", count: 12, targetLevel: "IC4", startMonth: 10 },
           { department: "G&A", count: 1, targetLevel: "IC3", startMonth: 11 },

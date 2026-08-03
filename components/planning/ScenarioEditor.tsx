@@ -169,6 +169,15 @@ export function ScenarioEditor({
                 {LEVEL_ORDER.map((l) => <option key={l} value={l}>{l}</option>)}
               </select>
               <NumInput value={row.count} onChange={(v) => patch((a) => ({ ...a, hirePlan: replaceAt(a.hirePlan, i, { ...row, count: v }) }))} suffix="hires" />
+              <select
+                className={selectCls}
+                value={row.targetLocation ?? ""}
+                title="Target location — leave as Mix to apportion via the Location mix card below"
+                onChange={(e) => patch((a) => ({ ...a, hirePlan: replaceAt(a.hirePlan, i, { ...row, targetLocation: e.target.value }) }))}
+              >
+                <option value="">Location: Mix</option>
+                {LOCATIONS.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
               <MonthPicker value={row.startMonth} onChange={(v) => patch((a) => ({ ...a, hirePlan: replaceAt(a.hirePlan, i, { ...row, startMonth: v }) }))} />
               <RemoveBtn onClick={() => patch((a) => ({ ...a, hirePlan: a.hirePlan.filter((_, idx) => idx !== i) }))} />
             </div>
@@ -286,7 +295,7 @@ export function ScenarioEditor({
             <CardTitle>Location mix</CardTitle>
             <Badge variant={Math.abs(locationMixTotal - 100) < 1 ? "success" : "warning"}>{locationMixTotal.toFixed(0)}% total</Badge>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Share of new hires by location — drives the projected International % trend.</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Fallback split for hiring waves left on &quot;Location: Mix&quot; above — drives the projected International % trend for those hires.</p>
           <div className="mt-3 grid grid-cols-2 gap-2">
             {LOCATIONS.map((loc) => (
               <label key={loc.id} className="flex items-center justify-between gap-2 text-xs">
@@ -361,7 +370,7 @@ function replaceAt<T>(arr: T[], i: number, value: T): T[] {
   return next;
 }
 function defaultHire(departments: string[]): HirePlanEntry {
-  return { department: departments[0] ?? "", targetLevel: "IC3", count: 5, startMonth: 1 };
+  return { department: departments[0] ?? "", targetLevel: "IC3", count: 5, startMonth: 1, targetLocation: "" };
 }
 function defaultTransfer(departments: string[]): TransferEntry {
   return { fromDepartment: departments[0] ?? "", toDepartment: departments[1] ?? departments[0] ?? "", count: 1, month: 1 };
