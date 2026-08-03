@@ -18,7 +18,7 @@ Extended reference material that didn't fit the 2-page `README.md`. See also [`D
 
 ## AI feature — full guardrail detail
 
-Tool-use, not text-to-SQL: `lib/ai-tools.ts` defines six zod-validated tools; the model never sees or writes SQL.
+Tool-use, not text-to-SQL: `lib/ai-tools.ts` defines seven zod-validated tools; the model never sees or writes SQL.
 
 **Structured output is the real anti-hallucination mechanism.** The system prompt is split into labeled sections (`ROLE`/`DATA ACCESS`/`GUARDRAILS`/`RESPONSE PROTOCOL`) instead of one paragraph. The model must call a terminal `provide_answer({ answer, confidence, confidenceReason, citations[] })` tool as its last action — never plain text. Citing tool results is a required schema field, not something hoped for in prose. `confidence` is self-reported (`high`/`medium`/`low`) and shown as a color-coded badge; `citations` renders as an expandable sources list. If the model ignores the protocol, the route still surfaces the text but forces `confidence: "low"` with no citations.
 
@@ -46,7 +46,7 @@ Tool-use, not text-to-SQL: `lib/ai-tools.ts` defines six zod-validated tools; th
 ## What I'd do differently with more time
 
 - Real Postgres from day one, avoiding the SQLite enum/Json workaround entirely.
-- A structured scenario assumption editor (hire-plan row builder) instead of raw JSON.
+- Finish the design-system polish pass (loading skeletons, error boundaries, accessibility audit) uniformly across every route — currently done on the highest-traffic pages, not all of them.
 - Promotion-specific BP handling (level + position change, not just comp).
 - A real queueing/notification layer for BP approvals instead of a polling inbox.
 - Cohort-based attrition and a proper cumulative wage-base ledger.
